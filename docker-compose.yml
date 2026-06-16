@@ -1,0 +1,79 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: qdata-postgres
+    environment:
+      POSTGRES_DB: qdata
+      POSTGRES_USER: qdata
+      POSTGRES_PASSWORD: qdata_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qdata"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: qdata-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: qdata-backend
+    ports:
+      - "8000:8000"
+    environment:
+      QDATA_DATABASE_URL: postgresql+asyncpg://qdata:qdata_pass@postgres:5432/qdata
+      QDATA_REDIS_URL: redis://redis:6379/0
+      QDATA_JWT_SECRET: dev-secret-change-in-prod
+      QDATA_SMTP_HOST: mailpit
+      QDATA_SMTP_PORT: 1025
+      QDATA_ENV: development
+    volumes:
+      - ./backend:/app
+      - ./data/uploads:/tmp/qdata_uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python -m alembic upgrade head &&
+             uvicorn qdata.web.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: qdata-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    environment:
+      VITE_API_URL: http://localhost:8000
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: qdata-mailpit
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+volumes:
+  pgdata:

@@ -1,0 +1,489 @@
+import asyncio
+import json
+import re
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from qdata.auth.dependencies import get_current_user
+from qdata.core.loader import load_data
+from qdata.db.models import DataSource, Source, User
+from qdata.db.session import get_session
+
+router = APIRouter()
+
+DEFAULT_PORTS = {
+    "postgresql": 5432,
+    "mysql": 3306,
+    "sqlserver": 1433,
+}
+
+
+def build_connection_string(source_type: str, fields: dict) -> str:
+    host = fields.get("host", "")
+    port = fields.get("port")
+    database = fields.get("database", "")
+    username = fields.get("username", "")
+    password = fields.get("password", "")
+    ssl = fields.get("ssl", False)
+
+    if source_type == "postgresql":
+        port = port or DEFAULT_PORTS["postgresql"]
+        pw = _url_encode(password)
+        cs = f"postgresql://{username}:{pw}@{host}:{port}/{database}"
+        if ssl:
+            cs += "?sslmode=require"
+        return cs
+    elif source_type == "mysql":
+        port = port or DEFAULT_PORTS["mysql"]
+        pw = _url_encode(password)
+        return f"mysql+pymysql://{username}:{pw}@{host}:{port}/{database}"
+    elif source_type == "sqlserver":
+        port = port or DEFAULT_PORTS["sqlserver"]
+        pw = _url_encode(password)
+        driver = "ODBC+Driver+17+for+SQL+Server"
+        return f"mssql+pyodbc://{username}:{pw}@{host}:{port}/{database}?driver={driver}"
+    elif source_type == "sqlite":
+        return f"sqlite:///{database}"
+    return ""
+
+
+def _url_encode(s: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_.\-~]", lambda m: f"%{ord(m.group(0)):02X}", s)
+
+
+def extract_db_fields(source_type: str, config: dict | None, connection_string: str | None) -> dict:
+    if config and isinstance(config, dict) and config.get("db_fields"):
+        return config["db_fields"]
+    if not connection_string:
+        return {"host": "", "port": None, "database": "", "username": "", "password": "", "ssl": False}
+    if source_type == "sqlite":
+        return {"host": "", "port": None, "database": connection_string.replace("sqlite:///", ""), "username": "", "password": "", "ssl": False}
+    m = re.match(r"\w+(?:\+\w+)?://([^:]+):([^@]+)@([^:]+):(\d+)/([^?]+)(?:\?sslmode=require)?", connection_string)
+    if m:
+        return {
+            "host": m.group(3), "port": int(m.group(4)), "database": m.group(5),
+            "username": m.group(1), "password": m.group(2), "ssl": "sslmode=require" in connection_string,
+        }
+    return {"host": "", "port": None, "database": "", "username": "", "password": "", "ssl": False}
+
+
+class DBFields(BaseModel):
+    host: str = ""
+    port: int | None = None
+    database: str = ""
+    username: str = ""
+    password: str = ""
+    ssl: bool = False
+
+
+class DataSourceCreate(BaseModel):
+    name: str
+    source_type: str
+    db_fields: DBFields = DBFields()
+    file_path: str = ""
+    config: dict = {}
+
+
+class DataSourceUpdate(BaseModel):
+    name: str | None = None
+    source_type: str | None = None
+    db_fields: DBFields | None = None
+    file_path: str | None = None
+    config: dict | None = None
+
+
+class TestConnectionRequest(BaseModel):
+    source_type: str
+    db_fields: DBFields = DBFields()
+    file_path: str = ""
+
+
+class TestConnectionResponse(BaseModel):
+    success: bool
+    tables: list[str] = []
+    error: str = ""
+
+
+def _serialize(ds: DataSource) -> dict:
+    return {
+        "id": str(ds.id),
+        "name": ds.name,
+        "source_type": ds.source_type,
+        "connection_string": ds.connection_string or "",
+        "file_path": ds.file_path or "",
+        "config": ds.config or {},
+        "db_fields": extract_db_fields(ds.source_type, ds.config, ds.connection_string),
+        "created_at": ds.created_at.isoformat() if ds.created_at else None,
+    }
+
+
+@router.get("/")
+async def list_datasources(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    from sqlalchemy import desc
+    result = await session.execute(
+        select(DataSource).where(DataSource.user_id == user.id).order_by(desc(DataSource.created_at))
+    )
+    return [_serialize(ds) for ds in result.scalars().all()]
+
+
+@router.get("/{ds_id}")
+async def get_datasource(
+    ds_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(DataSource).where(DataSource.id == ds_id, DataSource.user_id == user.id)
+    )
+    ds = result.scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    return _serialize(ds)
+
+
+@router.post("/", status_code=201)
+async def create_datasource(
+    req: DataSourceCreate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    config = req.config or {}
+    if req.db_fields.host:
+        config["db_fields"] = req.db_fields.model_dump()
+    connection_string = build_connection_string(req.source_type, config.get("db_fields", {})) if config.get("db_fields") else ""
+
+    ds = DataSource(
+        user_id=user.id,
+        name=req.name,
+        source_type=req.source_type,
+        connection_string=connection_string,
+        file_path=req.file_path,
+        config=config,
+    )
+    session.add(ds)
+    await session.commit()
+    await session.refresh(ds)
+    return _serialize(ds)
+
+
+@router.put("/{ds_id}")
+async def update_datasource(
+    ds_id: str,
+    req: DataSourceUpdate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(DataSource).where(DataSource.id == ds_id, DataSource.user_id == user.id)
+    )
+    ds = result.scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Data source not found")
+
+    if req.name is not None:
+        ds.name = req.name
+    if req.source_type is not None:
+        ds.source_type = req.source_type
+    if req.file_path is not None:
+        ds.file_path = req.file_path
+    if req.config is not None:
+        ds.config = req.config
+    if req.db_fields is not None:
+        config = ds.config or {}
+        config["db_fields"] = req.db_fields.model_dump()
+        ds.config = config
+        ds.connection_string = build_connection_string(ds.source_type, config["db_fields"])
+
+    await session.commit()
+    return {"ok": True}
+
+
+@router.delete("/{ds_id}")
+async def delete_datasource(
+    ds_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(DataSource).where(DataSource.id == ds_id, DataSource.user_id == user.id)
+    )
+    ds = result.scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    # Evict all associated cubes from DuckDB + clean up scheduler jobs
+    try:
+        sources_result = await session.execute(
+            select(Source).where(Source.data_source_id == ds_id)
+        )
+        sources = sources_result.scalars().all()
+        if sources:
+            from qdata.core.cube import DataCubeManager
+            from qdata.scheduler.service import remove_source_refresh_job
+            for s in sources:
+                cache_key = DataCubeManager.make_key(
+                    source_type=ds.source_type,
+                    connection_string=ds.connection_string or "",
+                    query=s.query or "",
+                    file_path=ds.file_path or "",
+                )
+                DataCubeManager.get_instance().evict(cache_key)
+                if s.refresh_cron:
+                    asyncio.create_task(remove_source_refresh_job(str(s.id)))
+    except Exception:
+        pass
+    await session.delete(ds)
+    await session.commit()
+    return {"ok": True}
+
+
+@router.post("/test", response_model=TestConnectionResponse)
+async def test_connection(req: TestConnectionRequest):
+    try:
+        if req.source_type in ("csv", "excel", "json", "parquet", "txt"):
+            import os
+            if not req.file_path or not os.path.isfile(req.file_path):
+                return TestConnectionResponse(success=False, error="Archivo no encontrado")
+            if req.source_type == "csv":
+                import pandas as pd
+                pd.read_csv(req.file_path, nrows=5)
+            elif req.source_type == "excel":
+                import pandas as pd
+                pd.read_excel(req.file_path, nrows=5)
+            elif req.source_type == "json":
+                import pandas as pd
+                pd.read_json(req.file_path)
+            elif req.source_type == "parquet":
+                import pandas as pd
+                pd.read_parquet(req.file_path)
+            return TestConnectionResponse(success=True, tables=[])
+
+        fields = req.db_fields.model_dump()
+        conn_str = build_connection_string(req.source_type, fields)
+        if not conn_str:
+            return TestConnectionResponse(success=False, error=f"Tipo de fuente no soportado: {req.source_type}")
+
+        engine = create_engine(conn_str)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        return TestConnectionResponse(success=True, tables=tables)
+    except Exception as e:
+        return TestConnectionResponse(success=False, error=str(e)[:300])
+
+
+def _get_engine(ds: DataSource):
+    if ds.source_type in ("csv", "excel", "json", "parquet", "txt"):
+        return None
+    if ds.source_type == "sqlite":
+        cs = ds.connection_string or f"sqlite:///{ds.file_path}"
+    else:
+        cs = ds.connection_string or ""
+    return create_engine(cs) if cs else None
+
+
+@router.get("/{ds_id}/tables")
+async def list_tables(
+    ds_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(DataSource).where(DataSource.id == ds_id, DataSource.user_id == user.id)
+    )
+    ds = result.scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    engine = _get_engine(ds)
+    if not engine:
+        return {"tables": [], "columns": []}
+    try:
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        cols = []
+        for t in tables:
+            for c in inspector.get_columns(t):
+                cols.append({"table": t, "column": c["name"], "type": str(c["type"]), "nullable": c.get("nullable", True)})
+        return {"tables": tables, "columns": cols}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{ds_id}/tables/{table_name}/columns")
+async def list_columns(
+    ds_id: str,
+    table_name: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(DataSource).where(DataSource.id == ds_id, DataSource.user_id == user.id)
+    )
+    ds = result.scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    engine = _get_engine(ds)
+    if not engine:
+        return {"columns": []}
+    try:
+        inspector = inspect(engine)
+        cols = []
+        for c in inspector.get_columns(table_name):
+            cols.append({"name": c["name"], "type": str(c["type"]), "nullable": c.get("nullable", True)})
+        return {"columns": cols}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{ds_id}/suggest")
+async def suggest_tables(
+    ds_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(DataSource).where(DataSource.id == ds_id, DataSource.user_id == user.id)
+    )
+    ds = result.scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    engine = _get_engine(ds)
+    if not engine:
+        return {"suggestions": []}
+
+    try:
+        inspector = inspect(engine)
+        all_tables = inspector.get_table_names()
+        suggestions = []
+        for t in all_tables[:200]:
+            try:
+                cols = inspector.get_columns(t)
+            except Exception:
+                continue
+            col_names = [c["name"] for c in cols]
+            row_count = None
+            try:
+                with engine.connect() as conn:
+                    r = conn.execute(text(f"SELECT COUNT(*) FROM {t}"))
+                    row_count = r.scalar()
+            except Exception:
+                pass
+            priority = 0
+            tags = []
+            score = 0
+            if row_count and row_count >= 100:
+                priority += 1; score += 1
+            if row_count and row_count >= 1000:
+                priority += 1; score += 1
+            if row_count and row_count > 10000:
+                priority += 1; score += 1
+            name_lower = t.lower()
+            if any(k in name_lower for k in ["cliente", "paciente", "persona", "empleado", "user"]):
+                tags.append("personas"); score += 2
+            if any(k in name_lower for k in ["venta", "factur", "orden", "pedido", "transaccion"]):
+                tags.append("transacciones"); score += 2
+            if any(k in name_lower for k in ["producto", "inventario", "catalogo", "item"]):
+                tags.append("catalogos"); score += 1
+            if any(k in name_lower for k in ["nomina", "salario", "pago", "cheque"]):
+                tags.append("financiero"); score += 1
+            if any(cn.lower() in ("email", "correo") for cn in col_names):
+                tags.append("email"); score += 1
+            if any(cn.lower() in ("telefono", "phone", "celular") for cn in col_names):
+                tags.append("telefono"); score += 1
+            if any("fecha" in cn.lower() or "date" in cn.lower() for cn in col_names):
+                tags.append("fechas"); score += 0.5
+            if any("nombre" in cn.lower() or "name" in cn.lower() for cn in col_names):
+                tags.append("nombres"); score += 0.5
+            if any("id" == cn.lower().strip() or cn.lower().endswith("_id") for cn in col_names):
+                tags.append("id"); score += 0.5
+            suggestions.append({
+                "table": t,
+                "row_count": row_count,
+                "columns": len(col_names),
+                "col_names": col_names[:20],
+                "tags": tags,
+                "score": score,
+                "reason": _suggest_reason(tags, row_count, score),
+            })
+
+        suggestions.sort(key=lambda s: s["score"], reverse=True)
+        return {"suggestions": suggestions[:30]}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class PreviewQueryRequest(BaseModel):
+    query: str = ""
+    selected_columns: list[str] = []
+    row_limit: int | None = None
+
+
+@router.post("/{ds_id}/preview-query")
+async def preview_datasource_query(
+    ds_id: str,
+    req: PreviewQueryRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(DataSource).where(DataSource.id == ds_id, DataSource.user_id == user.id)
+    )
+    ds = result.scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Data source not found")
+
+    limit = req.row_limit or 100
+    try:
+        kwargs = {"nrows": limit + 1} if ds.source_type in ("csv", "excel", "json", "parquet") else {}
+        df = load_data(ds.source_type, ds.connection_string or "", req.query, ds.file_path or "", **kwargs)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error loading data: {e}")
+
+    if df.empty:
+        return {"columns": [], "rows": [], "total_rows": 0}
+
+    if req.selected_columns:
+        sel = [c for c in req.selected_columns if c in df.columns]
+        if sel:
+            df = df[sel]
+
+    total = len(df)
+    head = df.head(min(20, total))
+    return {
+        "columns": [str(c) for c in df.columns],
+        "rows": json.loads(head.to_json(orient="values")),
+        "total_rows": total,
+    }
+
+
+def _suggest_reason(tags: list, row_count: int | None, score: int) -> str:
+    reasons = []
+    if "personas" in tags:
+        reasons.append("contiene datos personales")
+    if "transacciones" in tags:
+        reasons.append("alta cardinalidad de transacciones")
+    if "catalogos" in tags:
+        reasons.append("posibles duplicados en catálogo")
+    if "financiero" in tags:
+        reasons.append("datos financieros sensibles")
+    if "email" in tags:
+        reasons.append("validación de emails")
+    if "telefono" in tags:
+        reasons.append("validación de teléfonos")
+    if "fechas" in tags:
+        reasons.append("series temporales")
+    if "nombres" in tags:
+        reasons.append("posibles duplicados por nombre")
+    if "id" in tags:
+        reasons.append("integridad referencial")
+    if row_count and row_count > 1000:
+        reasons.append(f"{row_count} registros")
+    return ", ".join(reasons[:3]) if reasons else ("muchos registros" if row_count and row_count > 100 else "volumen moderado")

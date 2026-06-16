@@ -1,0 +1,69 @@
+[project]
+name = "qdata"
+version = "0.1.0"
+description = "Sistema de Análisis de Calidad de Datos"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.30",
+    "aiosqlite>=0.20",
+    "pymysql>=1.1",
+    "aiomysql>=0.2",
+    "pyodbc>=5.2",
+    "alembic>=1.14",
+    "pandas>=2.2",
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "scikit-learn>=1.6",
+    "openpyxl>=3.1",
+    "fastparquet>=2024",
+    "python-jose[cryptography]>=3.3",
+    "bcrypt>=4.0",
+    "python-multipart>=0.0.18",
+    "pydantic[email]>=2.9",
+    "pydantic-settings>=2.6",
+    "typer>=0.15",
+    "apscheduler>=3.10",
+    "aiosmtplib>=4.0",
+    "jinja2>=3.1",
+    "jinja2-time>=0.2",
+    "plotly>=5.24",
+    "kaleido>=0.2",
+    "httpx>=0.28",
+    "python-dotenv>=1.0",
+    "rapidfuzz>=3.9",
+    "psycopg2-binary>=2.9",
+    "fpdf2>=2.8",
+    "duckdb>=1.2",
+]
+
+[project.scripts]
+qdata = "qdata.cli.app:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "watchfiles>=1.0",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
