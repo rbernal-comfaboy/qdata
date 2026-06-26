@@ -60,10 +60,14 @@ def build_connection_string(source_type: str, fields: dict) -> str:
         pw = _url_encode(password)
         return f"mysql+pymysql://{username}:{pw}@{host}:{port}/{database}"
     elif source_type == "sqlserver":
+        instance = fields.get("instance", "")
         port = port or DEFAULT_PORTS["sqlserver"]
         pw = _url_encode(password)
         driver = _detect_sqlserver_driver()
-        cs = f"mssql+pyodbc://{username}:{pw}@{host}:{port}/{database}?driver={driver}"
+        if instance:
+            cs = f"mssql+pyodbc://{username}:{pw}@{host}\\{instance}/{database}?driver={driver}"
+        else:
+            cs = f"mssql+pyodbc://{username}:{pw}@{host}:{port}/{database}?driver={driver}"
         if not ssl:
             cs += "&TrustServerCertificate=yes"
         return cs
@@ -99,6 +103,7 @@ class DBFields(BaseModel):
     username: str = ""
     password: str = ""
     ssl: bool = False
+    instance: str = ""
 
 
 class DataSourceCreate(BaseModel):
