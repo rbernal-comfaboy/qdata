@@ -15,10 +15,8 @@ const GROUP_LABELS: Record<string, string> = {
   negocio: 'Reglas de negocio',
   avanzadas: 'Avanzadas',
   integridad: 'Integridad',
-  personas: 'Personas',
+  personas_similares: 'Personas similares',
 }
-
-const PERSON_RULES = ['fuzzy_name_match', 'fuzzy_id_match', 'similar_dob', 'person_composite_similarity']
 
 export default function Analyze() {
   const navigate = useNavigate()
@@ -29,7 +27,9 @@ export default function Analyze() {
   const [selectedColumns, setSelectedColumns] = useState<string[]>([])
   const [starting, setStarting] = useState(false)
   const [startError, setStartError] = useState('')
-  const [similarityLevel, setSimilarityLevel] = useState<string>('profundo')
+  const [similaresMode, setSimilaresMode] = useState<string>('rapido')
+  const [similaresThreshold, setSimilaresThreshold] = useState<number>(80)
+  const [groupId, setGroupId] = useState('')
 
   const { data: rulesData } = useQuery({
     queryKey: ['rules-groups'],
@@ -37,7 +37,6 @@ export default function Analyze() {
   })
 
   const groups = (rulesData?.groups ?? []).filter((g: any) => g.name !== 'todo')
-  const simLevels = (rulesData?.similarity_levels ?? []) as Array<{ name: string; label: string; desc: string; rules: string[] }>
 
   useEffect(() => {
     if (groups.length > 0) {
@@ -49,19 +48,18 @@ export default function Analyze() {
     }
   }, [rulesData])
 
-  const changeSimilarityLevel = (level: string) => {
-    setSimilarityLevel(level)
-    const lvl = simLevels.find((l: any) => l.name === level)
-    const levelRules = lvl?.rules ?? []
-    setSelectedRules((prev) => {
-      const withoutPerson = prev.filter((r) => !PERSON_RULES.includes(r))
-      return [...withoutPerson, ...levelRules]
-    })
-  }
+  useEffect(() => {
+    setSimilaresThreshold(similaresMode === 'profundo' ? 70 : 80)
+  }, [similaresMode])
 
   const { data: sources, isLoading } = useQuery({
     queryKey: ['sources'],
     queryFn: () => api.get('/sources').then((r) => r.data),
+  })
+
+  const { data: analysisGroups = [] } = useQuery({
+    queryKey: ['groups'],
+    queryFn: () => api.get('/api/groups').then(r => r.data),
   })
 
   const { data: previewData, isLoading: previewLoading } = useQuery({
@@ -84,9 +82,24 @@ export default function Analyze() {
         project_name: projectName || `Análisis ${new Date().toLocaleDateString()}`,
         source_id: sourceId,
         rules: selectedRules,
+        group_id: groupId || null,
       }
       if (selectedColumns.length > 0 && selectedColumns.length < (previewData?.columns?.length || 0)) {
         payload.columns = selectedColumns
+      }
+      const hasCols = selectedColumns.length > 0 && selectedColumns.length < (previewData?.columns?.length || 0)
+      payload.rule_configs = {}
+      if (selectedRules.includes('personas_similares')) {
+        payload.rule_configs.personas_similares = {
+          mode: similaresMode,
+          threshold: similaresThreshold / 100,
+          columns: hasCols ? selectedColumns : undefined,
+        }
+      }
+      if (selectedRules.includes('duplicate_check') && hasCols) {
+        payload.rule_configs.duplicate_check = {
+          columns: selectedColumns,
+        }
       }
       const res = await api.post('/analyze/start', payload)
       navigate(`/processes/${res.data.project_id}`)
@@ -94,15 +107,6 @@ export default function Analyze() {
       setStarting(false)
       setStartError(err?.response?.data?.detail || 'Error al iniciar el análisis')
     }
-  }
-
-  const syncLevelFromRules = (rules: string[]) => {
-    const activePerson = rules.filter((r) => PERSON_RULES.includes(r))
-    const match = simLevels.find((lvl) => {
-      const lvlRules = lvl.rules ?? []
-      return lvlRules.length === activePerson.length && lvlRules.every((r) => activePerson.includes(r))
-    })
-    setSimilarityLevel(match?.name ?? '')
   }
 
   const toggleGroup = (groupName: string, rules: any[]) => {
@@ -117,15 +121,12 @@ export default function Analyze() {
       next = newRules
     }
     setSelectedRules(next)
-    if (groupName === 'personas') syncLevelFromRules(next)
   }
 
   const toggleRule = (ruleName: string) => {
-    setSelectedRules((prev) => {
-      const next = prev.includes(ruleName) ? prev.filter((r) => r !== ruleName) : [...prev, ruleName]
-      if (PERSON_RULES.includes(ruleName)) syncLevelFromRules(next)
-      return next
-    })
+    setSelectedRules((prev) =>
+      prev.includes(ruleName) ? prev.filter((r) => r !== ruleName) : [...prev, ruleName]
+    )
   }
 
   const toggleExpand = (groupName: string) => {
@@ -135,12 +136,10 @@ export default function Analyze() {
   const selectAll = () => {
     const all: string[] = groups.flatMap((g: any) => g.rules.map((r: any) => r.name))
     setSelectedRules([...new Set(all)])
-    syncLevelFromRules([...new Set(all)])
   }
 
   const clearAll = () => {
     setSelectedRules([])
-    syncLevelFromRules([])
   }
 
   const sourceLabels: Record<string, string> = {
@@ -161,6 +160,19 @@ export default function Analyze() {
             <h2 className="text-xl font-semibold mb-4">Nombre del Análisis</h2>
             <input type="text" value={projectName} onChange={(e) => setProjectName(e.target.value)}
               className="glass-input" placeholder="Ej: Análisis de ventas Q1" />
+          </GlassContainer>
+
+          <GlassContainer>
+            <h2 className="text-xl font-semibold mb-4">Grupo de Análisis</h2>
+            <select value={groupId} onChange={(e) => setGroupId(e.target.value)} className="glass-input">
+              <option value="">Sin grupo</option>
+              {analysisGroups.map((g: any) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+            {analysisGroups.length === 0 && (
+              <p className="text-xs text-muted mt-2">No hay grupos creados. Crea uno en "Grupos de Análisis" para organizar tus análisis.</p>
+            )}
           </GlassContainer>
 
           <GlassContainer>
@@ -276,39 +288,60 @@ export default function Analyze() {
                       <span className="text-xs text-muted ml-auto">{ruleNames.filter((r: string) => selectedRules.includes(r)).length}/{ruleNames.length}</span>
                     </div>
 
-                    {isExpanded && group.name === 'personas' && simLevels.length > 0 ? (
-                      <div className="pl-10 pb-3 space-y-2">
-                        {simLevels.map((lvl: any) => (
-                          <label key={lvl.name} className={`flex items-start gap-2 p-2 rounded-lg cursor-pointer transition-colors ${
-                            similarityLevel === lvl.name ? 'bg-indigo-500/15 border border-indigo-500/30' : 'hover:bg-white/5'
-                          }`}>
-                            <input type="radio" name="similarity-level" checked={similarityLevel === lvl.name}
-                              onChange={() => changeSimilarityLevel(lvl.name)}
-                              className="w-4 h-4 mt-0.5 accent-indigo-500" />
-                            <div className="flex-1 min-w-0">
-                              <span className={`text-xs font-medium ${
-                                lvl.name === 'rapido' ? 'text-green-300' :
-                                lvl.name === 'medio' ? 'text-yellow-300' :
-                                lvl.name === 'profundo' ? 'text-red-300' :
-                                'text-muted'
-                              }`}>{lvl.label}</span>
-                              {lvl.desc && <p className="text-[10px] text-muted mt-0.5">{lvl.desc}</p>}
-                            </div>
-                          </label>
-                        ))}
-                      </div>
-                    ) : isExpanded ? (
+                    {isExpanded ? (
                       <div className="pl-10 pb-2 space-y-1">
                         {group.rules.map((rule: any) => (
-                          <label key={rule.name} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/5 cursor-pointer">
-                            <input type="checkbox" checked={selectedRules.includes(rule.name)}
-                              onChange={() => toggleRule(rule.name)}
-                              className="w-3.5 h-3.5 rounded accent-indigo-500" />
-                            <span className="text-xs">{rule.label}</span>
-                            <span className={`text-xs ml-auto px-1.5 py-0.5 rounded-full ${rule.severity === 'error' ? 'bg-red-500/20 text-red-300' : 'bg-yellow-500/20 text-yellow-300'}`}>
-                              {rule.severity === 'error' ? 'error' : 'warn'}
-                            </span>
-                          </label>
+                          <div key={rule.name}>
+                            <label className="flex items-center gap-2 p-1.5 rounded hover:bg-white/5 cursor-pointer">
+                              <input type="checkbox" checked={selectedRules.includes(rule.name)}
+                                onChange={() => toggleRule(rule.name)}
+                                className="w-3.5 h-3.5 rounded accent-indigo-500" />
+                              <span className="text-xs">{rule.label}</span>
+                              <span className={`text-xs ml-auto px-1.5 py-0.5 rounded-full ${rule.severity === 'error' ? 'bg-red-500/20 text-red-300' : 'bg-yellow-500/20 text-yellow-300'}`}>
+                                {rule.severity === 'error' ? 'error' : 'warn'}
+                              </span>
+                            </label>
+                            {rule.name === 'personas_similares' && selectedRules.includes('personas_similares') && (
+                              <>
+                                <div className="flex flex-wrap gap-1.5 mt-1 mb-1.5">
+                                  <button type="button"
+                                    onClick={() => setSimilaresMode('rapido')}
+                                    className={`text-[11px] px-3 py-1 rounded-full border font-medium transition-colors ${
+                                      similaresMode === 'rapido'
+                                        ? 'bg-green-500/20 border-green-500/40 text-green-300'
+                                        : 'border-white/15 text-muted hover:border-white/30'
+                                    }`}>
+                                    ⚡ Búsqueda Rápida
+                                  </button>
+                                  <button type="button"
+                                    onClick={() => setSimilaresMode('profundo')}
+                                    className={`text-[11px] px-3 py-1 rounded-full border font-medium transition-colors ${
+                                      similaresMode === 'profundo'
+                                        ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                                        : 'border-white/15 text-muted hover:border-white/30'
+                                    }`}>
+                                    🧠 Búsqueda Profunda
+                                  </button>
+                                </div>
+                                <div className="flex items-center gap-3 mt-1 mb-1.5 px-1">
+                                  <label className="text-[10px] text-muted whitespace-nowrap">Sensibilidad</label>
+                                  <input
+                                    type="range"
+                                    min={50}
+                                    max={95}
+                                    step={1}
+                                    value={similaresThreshold}
+                                    onChange={(e) => setSimilaresThreshold(Number(e.target.value))}
+                                    className="flex-1 h-1 accent-indigo-500 cursor-pointer"
+                                  />
+                                  <span className="text-[11px] font-mono text-white/80 w-8 text-right">{similaresThreshold}%</span>
+                                </div>
+                                <p className="text-[9px] text-muted/60 px-1 -mt-1 mb-1">
+                                  Menor = más estricto (menos resultados). Mayor = más permisivo (más hallazgos).
+                                </p>
+                              </>
+                            )}
+                          </div>
                         ))}
                       </div>
                     ) : null}

@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   ArrowLeft, CheckCircle, XCircle, AlertTriangle, Info,
-  ChevronLeft, ChevronRight, ExternalLink,
+  ChevronLeft, ChevronRight, ExternalLink, Search,
 } from 'lucide-react'
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
@@ -25,6 +25,12 @@ function renderVal(v: any) {
   if (v === null || v === undefined) return <span className="text-muted">—</span>
   if (Array.isArray(v)) return v.join(', ')
   if (typeof v === 'object') return JSON.stringify(v)
+  if (typeof v === 'number') {
+    if (Number.isInteger(v)) return v.toLocaleString()
+    const s = v.toString()
+    if (s.includes('.') && s.split('.')[1].length > 4) return v.toFixed(4)
+    return String(v)
+  }
   return String(v)
 }
 
@@ -56,6 +62,14 @@ function DetailsTable({ details }: { details: any[] }) {
 }
 
 
+
+const GROUP_RULE_TYPES: Record<string, string> = {
+  person_composite_similarity: 'person_composite_groups',
+  personas_similares: 'personas_similares_groups',
+  fuzzy_name_match: 'fuzzy_name_groups',
+  fuzzy_id_match: 'fuzzy_id_groups',
+  similar_dob: 'similar_dob_groups',
+}
 
 function getGroupMembers(rule: any, item: any): any[] {
   const typeKey = GROUP_RULE_TYPES[rule.rule_name]
@@ -106,9 +120,30 @@ export default function RuleDetail() {
   const hasDetails = rule.details?.length > 0
 
   const [page, setPage] = useState(0)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(25)
+  const [failuresPage, setFailuresPage] = useState(0)
+  const [failuresPageSize, setFailuresPageSize] = useState(25)
+  const [searchTerm, setSearchTerm] = useState('')
   const totalPages = hasDetails ? Math.ceil(rule.details.length / pageSize) : 0
   const paginatedDetails = hasDetails ? rule.details.slice(page * pageSize, (page + 1) * pageSize) : []
+
+  const filteredFailures = useMemo(() => {
+    if (!searchTerm.trim()) return failures
+    const term = searchTerm.toLowerCase()
+    return failures.filter((item: any) => {
+      const values = item.values
+        ? item.values
+        : item.rows
+          ? Object.assign({}, ...item.rows.map((r: any) => r.values || {}))
+          : item
+      return Object.values(values).some((v: any) =>
+        String(v).toLowerCase().includes(term)
+      )
+    })
+  }, [failures, searchTerm])
+
+  const failuresTotalPages = Math.ceil(filteredFailures.length / failuresPageSize)
+  const paginatedFailures = filteredFailures.slice(failuresPage * failuresPageSize, (failuresPage + 1) * failuresPageSize)
 
   return (
     <div className="relative">
@@ -132,7 +167,7 @@ export default function RuleDetail() {
               <h1 className="text-2xl font-bold text-white">{rule.rule_name}</h1>
               <span className={`badge badge-${rule.severity}`}>{rule.severity}</span>
               <span className={`text-sm font-medium ${rule.passed ? 'text-green-400' : 'text-red-400'}`}>
-                {rule.passed ? 'Aprobado' : 'Fallos: ' + rule.failed + '/' + rule.total + ' (' + rule.failure_pct + '%)'}
+                {rule.passed ? 'Aprobado' : 'Fallos: ' + rule.failed + '/' + rule.total + ' (' + (rule.failure_pct ?? 0).toFixed(2) + '%)'}
               </span>
             </div>
             <p className="text-muted mt-2">{rule.description}</p>
@@ -147,20 +182,21 @@ export default function RuleDetail() {
         <GlassContainer className="mb-6">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold text-white">Resumen por columna</h2>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted">Mostrar</span>
-              <select
-                value={pageSize}
-                onChange={(e) => { setPage(0); setPageSize(Number(e.target.value)) }}
-                className="bg-white/10 border border-white/10 rounded text-xs text-white px-2 py-1"
-              >
-                <option value={5}>5</option>
-                <option value={10}>10</option>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-                <option value={rule.details.length}>Todos</option>
-              </select>
-            </div>
+            {rule.details.length > pageSize && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted">Mostrar</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => { setPage(0); setPageSize(Number(e.target.value)) }}
+                  className="bg-white/10 border border-white/10 rounded text-xs text-white px-2 py-1"
+                >
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={rule.details.length}>Todos</option>
+                </select>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -184,17 +220,22 @@ export default function RuleDetail() {
                 >
                   <ChevronLeft className="w-4 h-4 text-white" />
                 </button>
-                {Array.from({ length: totalPages }, (_, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setPage(i)}
-                    className={`w-7 h-7 rounded text-xs font-medium ${
-                      i === page ? 'bg-indigo-500 text-white' : 'text-muted hover:bg-white/10'
-                    }`}
-                  >
-                    {i + 1}
-                  </button>
-                ))}
+                {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                  const start = Math.max(0, page - 3)
+                  const idx = start + i
+                  if (idx >= totalPages) return null
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => setPage(idx)}
+                      className={`w-7 h-7 rounded text-xs font-medium ${
+                        idx === page ? 'bg-indigo-500 text-white' : 'text-muted hover:bg-white/10'
+                      }`}
+                    >
+                      {idx + 1}
+                    </button>
+                  )
+                })}
                 <button
                   onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
                   disabled={page >= totalPages - 1}
@@ -216,41 +257,138 @@ export default function RuleDetail() {
       <GlassContainer>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-white">
-            Detalle de errores ({failures.length})
+            Detalle de errores ({filteredFailures.length})
           </h2>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-muted absolute left-2 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Buscar..."
+                value={searchTerm}
+                onChange={(e) => { setSearchTerm(e.target.value); setFailuresPage(0) }}
+                className="bg-white/10 border border-white/10 rounded text-xs text-white pl-7 pr-2 py-1 w-40 placeholder:text-muted focus:outline-none focus:border-indigo-400"
+              />
+            </div>
+            <span className="text-xs text-muted">Mostrar</span>
+            <select
+              value={failuresPageSize}
+              onChange={(e) => { setFailuresPage(0); setFailuresPageSize(Number(e.target.value)) }}
+              className="bg-white/10 border border-white/10 rounded text-xs text-white px-2 py-1"
+            >
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={500}>500</option>
+              <option value={filteredFailures.length}>Todos</option>
+            </select>
+          </div>
         </div>
 
-        {failures.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/10">
-                  <th className="text-left p-2 text-muted font-medium whitespace-nowrap w-10">#</th>
-                  <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Fila</th>
-                  <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Columna</th>
-                  <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Valor</th>
-                  <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Descripción del error</th>
-                  <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Sugerencia</th>
-                </tr>
-              </thead>
-              <tbody>
-                {failures.map((item: any, i: number) => {
-                  const info = describeError(rule.rule_name, item, rule.recommendation)
-                  return (
-                    <tr key={i} onClick={() => navigate(`/reports/${reportId}/rules/${ruleIdx}/errors/${i}`)}
-                      className="border-b border-white/5 hover:bg-indigo-500/10 cursor-pointer transition-colors">
-                      <td className="p-2 text-muted">{i + 1}</td>
-                      <td className="p-2 text-white font-mono">{info.fila ?? '—'}</td>
-                      <td className="p-2 text-white">{info.columna ?? '—'}</td>
-                      <td className="p-2 text-white max-w-xs truncate font-mono text-xs">{info.valor ?? '—'}</td>
-                      <td className="p-2 text-white">{info.descripcion}</td>
-                      <td className="p-2 text-yellow-400 text-xs max-w-sm">{info.sugerencia}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+        {filteredFailures.length > 0 ? (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-white/10">
+                    <th className="text-left p-2 text-muted font-medium whitespace-nowrap w-10">#</th>
+                    <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Fila</th>
+                    <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Columna</th>
+                    <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Valor</th>
+                    <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Descripción del error</th>
+                    <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Sugerencia</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedFailures.map((item: any, i: number) => {
+                    const globalIdx = failuresPage * failuresPageSize + i
+                    const info = describeError(rule.rule_name, item, rule.recommendation)
+                    return (
+                      <tr key={globalIdx} onClick={() => navigate(`/reports/${reportId}/rules/${ruleIdx}/errors/${globalIdx}`)}
+                        className="border-b border-white/5 hover:bg-indigo-500/10 cursor-pointer transition-colors">
+                        <td className="p-2 text-muted">{globalIdx + 1}</td>
+                        <td className="p-2 text-white font-mono">{info.fila ?? '—'}</td>
+                        <td className="p-2 text-white">{info.columna ?? '—'}</td>
+                        <td className="p-2 text-white max-w-xs truncate font-mono text-xs">{info.valor ?? '—'}</td>
+                        <td className="p-2 text-white">{info.descripcion}</td>
+                        <td className="p-2 text-yellow-400 text-xs max-w-sm">{info.sugerencia}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {failuresTotalPages > 1 && (
+              <div className="flex items-center justify-between mt-4 pt-3 border-t border-white/10">
+                <p className="text-xs text-muted">
+                  {failuresPage * failuresPageSize + 1}–{Math.min((failuresPage + 1) * failuresPageSize, filteredFailures.length)} de {filteredFailures.length}
+                </p>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setFailuresPage(0)}
+                    disabled={failuresPage === 0}
+                    className="px-2 py-1 rounded text-xs text-muted hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    ««
+                  </button>
+                  <button
+                    onClick={() => setFailuresPage(Math.max(0, failuresPage - 1))}
+                    disabled={failuresPage === 0}
+                    className="p-1 rounded hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <ChevronLeft className="w-4 h-4 text-white" />
+                  </button>
+                  {(() => {
+                    const maxVisible = 7
+                    let start = Math.max(0, failuresPage - Math.floor(maxVisible / 2))
+                    let end = Math.min(failuresTotalPages, start + maxVisible)
+                    start = Math.max(0, end - maxVisible)
+                    const pages = []
+                    if (start > 0) {
+                      pages.push(
+                        <button key={0} onClick={() => setFailuresPage(0)}
+                          className="w-7 h-7 rounded text-xs font-medium text-muted hover:bg-white/10">1</button>
+                      )
+                      if (start > 1) pages.push(<span key="e1" className="text-muted text-xs">…</span>)
+                    }
+                    for (let i = start; i < end; i++) {
+                      pages.push(
+                        <button key={i} onClick={() => setFailuresPage(i)}
+                          className={`w-7 h-7 rounded text-xs font-medium ${
+                            i === failuresPage ? 'bg-indigo-500 text-white' : 'text-muted hover:bg-white/10'
+                          }`}>
+                          {i + 1}
+                        </button>
+                      )
+                    }
+                    if (end < failuresTotalPages) {
+                      if (end < failuresTotalPages - 1) pages.push(<span key="e2" className="text-muted text-xs">…</span>)
+                      pages.push(
+                        <button key={failuresTotalPages - 1} onClick={() => setFailuresPage(failuresTotalPages - 1)}
+                          className="w-7 h-7 rounded text-xs font-medium text-muted hover:bg-white/10">{failuresTotalPages}</button>
+                      )
+                    }
+                    return pages
+                  })()}
+                  <button
+                    onClick={() => setFailuresPage(Math.min(failuresTotalPages - 1, failuresPage + 1))}
+                    disabled={failuresPage >= failuresTotalPages - 1}
+                    className="p-1 rounded hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <ChevronRight className="w-4 h-4 text-white" />
+                  </button>
+                  <button
+                    onClick={() => setFailuresPage(failuresTotalPages - 1)}
+                    disabled={failuresPage >= failuresTotalPages - 1}
+                    className="px-2 py-1 rounded text-xs text-muted hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    »»
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         ) : (
           <p className="text-muted text-sm">No hay errores de muestra para esta regla</p>
         )}

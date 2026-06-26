@@ -20,6 +20,8 @@ import DataSources from './pages/DataSources'
 import Connections from './pages/Connections'
 import Sources from './pages/Sources'
 import SourceForm from './pages/SourceForm'
+import Groups from './pages/Groups'
+import GroupDashboard from './pages/GroupDashboard'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token)
@@ -58,6 +60,8 @@ export default function App() {
           <Route path="rules" element={<Rules />} />
           <Route path="scheduler" element={<Scheduler />} />
           <Route path="scheduler/new" element={<SchedulerNew />} />
+          <Route path="groups" element={<Groups />} />
+          <Route path="groups/:groupId" element={<GroupDashboard />} />
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>

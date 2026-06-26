@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, Boolean, JSON
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, Boolean, JSON, Float
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import relationship
 
@@ -24,6 +24,7 @@ class User(Base):
     scheduled_tasks = relationship("ScheduledTask", back_populates="user", cascade="all, delete-orphan")
     custom_rules = relationship("CustomRule", back_populates="user", cascade="all, delete-orphan")
     rule_groups = relationship("RuleGroup", back_populates="user", cascade="all, delete-orphan")
+    analysis_groups = relationship("AnalysisGroup", back_populates="user", cascade="all, delete-orphan")
 
 
 class Project(Base):
@@ -31,6 +32,7 @@ class Project(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    group_id = Column(UUID(as_uuid=True), ForeignKey("analysis_groups.id", ondelete="SET NULL"), nullable=True)
     name = Column(String(255), nullable=False)
     description = Column(Text)
     source_config = Column(JSON, nullable=False)
@@ -41,6 +43,7 @@ class Project(Base):
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = relationship("User", back_populates="projects")
+    group = relationship("AnalysisGroup", back_populates="projects")
     reports = relationship("Report", back_populates="project", cascade="all, delete-orphan")
     scheduled_tasks = relationship("ScheduledTask", back_populates="project", cascade="all, delete-orphan")
 
@@ -51,7 +54,7 @@ class Report(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    score = Column(Integer)
+    score = Column(Float)
     label = Column(String(20))
     result_json = Column(JSON, nullable=False)
     recommendations = Column(JSON)
@@ -91,7 +94,7 @@ class TaskHistory(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     task_id = Column(UUID(as_uuid=True), ForeignKey("scheduled_tasks.id", ondelete="CASCADE"), nullable=False)
     status = Column(String(20))
-    score = Column(Integer)
+    score = Column(Float)
     error = Column(Text)
     email_sent = Column(Boolean, default=False)
     report_id = Column(UUID(as_uuid=True), ForeignKey("reports.id"))
@@ -130,6 +133,21 @@ class RuleGroup(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     user = relationship("User", back_populates="rule_groups")
+
+
+class AnalysisGroup(Base):
+    __tablename__ = "analysis_groups"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    color = Column(String(20), default="#6366f1")
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="analysis_groups")
+    projects = relationship("Project", back_populates="group", cascade="all, delete-orphan")
 
 
 class DataSource(Base):

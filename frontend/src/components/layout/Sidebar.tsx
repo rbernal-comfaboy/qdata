@@ -12,6 +12,7 @@ import {
   LogOut,
   Sun,
   Moon,
+  FolderTree,
 } from 'lucide-react'
 import { useAuthStore } from '../../hooks/useAuth'
 import { useTheme } from '../../hooks/useTheme'
@@ -19,6 +20,7 @@ import { cn } from '../../lib/utils'
 
 const links = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/groups', icon: FolderTree, label: 'Grupos de Análisis' },
   { to: '/processes', icon: FolderOpen, label: 'Procesos' },
   { to: '/connections', icon: Database, label: 'Conexiones' },
   { to: '/datasources', icon: BookOpen, label: 'Fuentes' },

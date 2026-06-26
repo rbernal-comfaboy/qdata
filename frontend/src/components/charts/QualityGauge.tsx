@@ -39,7 +39,9 @@ export default function QualityGauge({ score, size = 200 }: QualityGaugeProps) {
         </PieChart>
       </ResponsiveContainer>
       <div className="absolute inset-0 flex items-center justify-center">
-        <span className="font-bold text-white" style={{ fontSize: size * 0.2 }}>{score}</span>
+        <span className="font-bold text-white" style={{ fontSize: size * 0.15 }}>
+          {Number(score).toFixed(2)}%
+        </span>
       </div>
     </div>
   )

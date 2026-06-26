@@ -38,10 +38,10 @@ class NullCheck(Rule):
         for col in columns:
             if any(d["column"] == col for d in details):
                 nulls = conn.execute(
-                    f"SELECT \"{col}\" FROM data WHERE \"{col}\" IS NULL LIMIT 5"
+                    f"SELECT rowid, \"{col}\" FROM data WHERE \"{col}\" IS NULL OR (typeof(\"{col}\") = 'VARCHAR' AND TRIM(\"{col}\") = '') LIMIT 500"
                 ).fetchall()
                 for row_data in nulls:
-                    sample_failures.append({"column": col, "row": 0, "value": row_data[0]})
+                    sample_failures.append({"column": col, "row": int(row_data[0]), "value": row_data[1]})
 
         recommendation = None
         if not passed and details:
@@ -83,9 +83,15 @@ class NullCheck(Rule):
         sample_failures = []
         for col in df.columns:
             if null_counts[col] > 0:
-                indices = df[df[col].isnull()].index[:5].tolist()
+                indices = df[df[col].isnull()].index[:500].tolist()
                 for idx in indices:
                     sample_failures.append({"column": col, "row": int(idx), "value": None})
+            if empty_counts[col] > 0:
+                empty_mask = df[col].astype(str).str.strip().eq("")
+                empty_indices = df[empty_mask].index[:500].tolist()
+                for idx in empty_indices:
+                    if idx not in df[df[col].isnull()].index:
+                        sample_failures.append({"column": col, "row": int(idx), "value": ""})
 
         passed = failure_pct <= self.MAX_NULL_PCT
         recommendation = None

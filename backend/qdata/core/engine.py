@@ -20,7 +20,7 @@ from qdata.rules.date_rules import InvalidDateCheck, DateRangeCheck, DateInconsi
 from qdata.rules.business_rules import CrossConsistencyCheck, FunctionalDependencyCheck, ClassBalanceCheck, BooleanBiasCheck, DerivedColumnCheck
 from qdata.rules.advanced_rules import RowCompletenessCheck, MultivariateOutlierCheck, DriftCheck, SchemaEvolutionCheck
 from qdata.rules.integrity_rules import VolumeAnomalyCheck, SequentialIntegrityCheck, MissingFKCheck
-from qdata.rules.person_dedup_rules import FuzzyNameMatch, FuzzyIdMatch, SimilarDob, PersonCompositeSimilarity
+from qdata.rules.person_dedup_rules import FuzzyNameMatch, FuzzyIdMatch, SimilarDob, PersonCompositeSimilarity, SimilarPeopleCheck
 
 RULE_REGISTRY = {
     # Grupo: básico (reglas originales)
@@ -69,6 +69,7 @@ RULE_REGISTRY = {
     "fuzzy_id_match": FuzzyIdMatch,
     "similar_dob": SimilarDob,
     "person_composite_similarity": PersonCompositeSimilarity,
+    "personas_similares": SimilarPeopleCheck,
 }
 
 RULE_GROUPS = {
@@ -78,7 +79,7 @@ RULE_GROUPS = {
     "negocio": ["cross_consistency", "functional_dependency", "class_balance", "boolean_bias", "derived_columns"],
     "avanzadas": ["row_completeness", "multivariate_outliers", "drift", "schema_evolution"],
     "integridad": ["volume_anomaly", "sequential_integrity", "missing_fks"],
-    "personas": ["fuzzy_name_match", "fuzzy_id_match", "similar_dob", "person_composite_similarity"],
+    "personas_similares": ["personas_similares"],
     "todo": list(RULE_REGISTRY.keys()),
 }
 
@@ -90,7 +91,7 @@ SIMILARITY_LEVELS = {
 }
 
 
-def resolve_rules(rules_config: list[str] | str) -> list[Rule]:
+def resolve_rules(rules_config: list[str] | str, rule_configs: dict | None = None) -> list[Rule]:
     if isinstance(rules_config, str):
         if rules_config == "all":
             return [cls() for cls in RULE_REGISTRY.values()]
@@ -119,7 +120,17 @@ def resolve_rules(rules_config: list[str] | str) -> list[Rule]:
             seen.add(n)
             unique_names.append(n)
 
-    return [RULE_REGISTRY[name]() for name in unique_names if name in RULE_REGISTRY]
+    configs = rule_configs or {}
+    rules = []
+    for name in unique_names:
+        if name in RULE_REGISTRY:
+            cls = RULE_REGISTRY[name]
+            rule_cfg = configs.get(name, {})
+            if rule_cfg:
+                rules.append(cls(**rule_cfg))
+            else:
+                rules.append(cls())
+    return rules
 
 
 class Engine:

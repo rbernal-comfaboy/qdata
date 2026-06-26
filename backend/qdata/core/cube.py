@@ -28,7 +28,10 @@ class DataCube:
         self.row_count = len(df)
         self.column_count = len(df.columns)
 
-        conn.register("data", df)
+        try:
+            conn.register("data", df)
+        except Exception as e:
+            logger.warning("Failed to register data with DuckDB for cube %s: %s", key[:8], e)
         self._build_profile(df)
 
     def _build_profile(self, df: pd.DataFrame):
@@ -124,7 +127,7 @@ class DataCubeManager:
         cube.last_accessed = time.time()
         return cube
 
-    def put(self, key: str, df: pd.DataFrame) -> DataCube:
+    def put(self, key: str, df: pd.DataFrame) -> DataCube | None:
         self._ensure_space(df.memory_usage(deep=True).sum())
         try:
             import duckdb
@@ -141,7 +144,10 @@ class DataCubeManager:
             return cube
         except ImportError:
             logger.warning("duckdb not available, skipping cube cache")
-            raise
+            return None
+        except Exception as e:
+            logger.warning("Failed to cache cube %s: %s", key[:8], e)
+            return None
 
     def get_or_load(self, key: str, loader: Callable[[], pd.DataFrame]) -> pd.DataFrame:
         cube = self.get(key)

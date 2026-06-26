@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Play, PauseCircle, StopCircle, Trash2, Clock, Edit3, Save, X,
-  AlertCircle, CheckCircle, Loader2, BarChart3, Plus,
+  AlertCircle, CheckCircle, Loader2, BarChart3, Plus, Activity, List,
   ChevronDown, ChevronRight,
 } from 'lucide-react'
 import api from '../api/client'
@@ -13,7 +13,7 @@ import { formatDate } from '../lib/utils'
 const GROUP_LABELS: Record<string, string> = {
   basico: 'Básico', formato: 'Formato y validación', fechas: 'Fechas',
   negocio: 'Reglas de negocio', avanzadas: 'Avanzadas', integridad: 'Integridad',
-  personas: 'Personas',
+  personas_similares: 'Personas similares',
 }
 
 export default function ProcessDetail() {
@@ -33,7 +33,11 @@ export default function ProcessDetail() {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
   const esRef = useRef<EventSource | null>(null)
+  const logsEndRef = useRef<HTMLDivElement | null>(null)
 
+  const [elapsed, setElapsed] = useState(0)
+  const [liveLogs, setLiveLogs] = useState<string[]>([])
+  const [logOpen, setLogOpen] = useState(true)
   const [schedName, setSchedName] = useState('')
   const [schedFreq, setSchedFreq] = useState('daily')
   const [schedHour, setSchedHour] = useState('8')
@@ -61,12 +65,11 @@ export default function ProcessDetail() {
 
   const groups = (rulesData?.groups ?? []).filter((g: any) => g.name !== 'todo')
 
+  const fmtTime = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+
   // SSE subscription for real-time progress updates
   useEffect(() => {
     if (!id) return
-    const qs = queryClient.getQueryData(['process', id]) as any
-    const status = qs?.status
-    if (status !== 'running' && status !== 'pending') return
 
     const token = localStorage.getItem('qdata_token')
     const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
@@ -91,10 +94,20 @@ export default function ProcessDetail() {
               label: data.label ?? old.progress?.label ?? null,
               report_id: data.report_id ?? old.progress?.report_id ?? null,
               rules: data.rules || old.progress?.rules || [],
+              rule_processed: data.rule_processed ?? old.progress?.rule_processed ?? 0,
+              rule_total: data.rule_total ?? old.progress?.rule_total ?? 0,
+              rule_message: data.rule_message ?? old.progress?.rule_message ?? '',
+              rule_phase: data.rule_phase ?? old.progress?.rule_phase ?? '',
+              rule_extra: data.rule_extra ?? old.progress?.rule_extra ?? null,
+              load_message: data.load_message ?? old.progress?.load_message ?? '',
+              records_loaded: data.records_loaded ?? old.progress?.records_loaded ?? 0,
             },
           }
         })
-        if (data.status === 'completed' || data.status === 'failed') {
+        if (data.logs?.length) {
+          setLiveLogs(data.logs)
+        }
+        if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
           queryClient.invalidateQueries({ queryKey: ['process', id] })
         }
       } catch { /* ignore parse errors */ }
@@ -110,6 +123,10 @@ export default function ProcessDetail() {
       esRef.current = null
     }
   }, [id])
+
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [liveLogs])
 
   const rerunMutation = useMutation({
     mutationFn: () => api.post(`/processes/${id}/rerun`),
@@ -212,6 +229,17 @@ export default function ProcessDetail() {
     setExpandedGroups((prev) => ({ ...prev, [groupName]: !prev[groupName] }))
   }
 
+  const isRunning = process?.status === 'running' || process?.status === 'pending' || process?.status === 'paused' || process?.status === 'loading'
+
+  // Elapsed timer — MUST be before early returns (Rules of Hooks)
+  useEffect(() => {
+    if (isRunning) {
+      const start = Date.now()
+      const timer = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000)
+      return () => { clearInterval(timer); setElapsed(0) }
+    }
+  }, [isRunning])
+
   if (isLoading) {
     return (
       <div className="space-y-6">
@@ -234,9 +262,11 @@ export default function ProcessDetail() {
   const reports = process.reports || []
   const tasks = process.scheduled_tasks || []
   const progress = process.progress || {}
-  const isRunning = process.status === 'running' || process.status === 'pending' || process.status === 'paused'
   const isPaused = process.status === 'paused'
-  const pct = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0
+  const isCancelled = process.status === 'cancelled'
+  const rulePct = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0
+  const recordPct = progress.total_records > 0 ? Math.round(((progress.records_processed || 0) / progress.total_records) * 100) : 0
+  const pct = Math.round(rulePct * 0.5 + recordPct * 0.5)
 
   const freqLabels: Record<string, string> = {
     once: 'Una vez', daily: 'Cada día', weekly: 'Cada semana', monthly: 'Cada mes', yearly: 'Cada año',
@@ -324,87 +354,278 @@ export default function ProcessDetail() {
         </div>
       )}
 
+      {isCancelled && (
+        <div className="mb-6 p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-xl flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-yellow-400 shrink-0" />
+          <span className="text-sm text-yellow-300">Análisis cancelado</span>
+        </div>
+      )}
+
       {isRunning ? (
-        <GlassContainer className="mb-6">
-          <div className="space-y-4">
-            <div className="flex items-center gap-3">
-              {isPaused ? (
-                <PauseCircle className="w-6 h-6 text-yellow-400" />
-              ) : progress.total === 0 ? (
-                <Loader2 className="w-6 h-6 animate-spin text-amber-400" />
-              ) : (
-                <Loader2 className="w-6 h-6 animate-spin text-indigo-400" />
+        <div className="mb-6 space-y-4">
+          {/* Loading phase */}
+          {process?.status === 'loading' && (
+            <div className="rounded-xl bg-white/5 p-4 border border-white/10 space-y-3">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-semibold px-2 py-1 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 flex items-center gap-1.5">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Cargando datos
+                </span>
+                <span className="text-xs text-muted flex items-center gap-1.5">
+                  <Clock className="w-3 h-3" />
+                  {fmtTime(elapsed)}
+                </span>
+              </div>
+              <p className="text-xs text-muted">{progress.load_message || 'Leyendo fuente de datos...'}</p>
+              {progress.total_records > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] text-muted">Registros leídos</span>
+                    <span className="text-xs font-semibold text-blue-400">
+                      {(progress.records_loaded || 0).toLocaleString()} / {progress.total_records.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                    <div className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                      style={{ width: `${Math.min((progress.records_loaded || 0) / progress.total_records * 100, 100)}%` }} />
+                  </div>
+                </div>
               )}
-              <div>
-                <h2 className="text-xl font-bold">{process.name}</h2>
-                <p className="text-sm text-muted">
-                  {isPaused ? 'Análisis pausado' : progress.total > 0 ? 'Ejecutando análisis...' : 'Iniciando análisis...'}
-                </p>
-              </div>
+              {progress.total_records === 0 && progress.records_loaded > 0 && (
+                <p className="text-xs text-blue-300">{progress.records_loaded.toLocaleString()} registros leídos...</p>
+              )}
             </div>
+          )}
+          {/* Top bar: En vivo badge + elapsed clock */}
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-semibold px-2 py-1 rounded-full bg-green-500/20 text-green-300 border border-green-500/30 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+              En vivo
+            </span>
+            <span className="text-xs text-muted flex items-center gap-1.5">
+              <Clock className="w-3 h-3" />
+              {fmtTime(elapsed)}
+            </span>
+            {isPaused && (
+              <span className="text-xs font-semibold px-2 py-1 rounded-full bg-yellow-500/20 text-yellow-300 border border-yellow-500/30">
+                Pausado
+              </span>
+            )}
+            {progress.current_rule && <span className="text-xs text-muted truncate">· {progress.current_rule}</span>}
+          </div>
+
+          {/* Stat panels */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="rounded-xl bg-white/5 p-4 border border-white/10">
+              <p className="text-[10px] text-muted uppercase tracking-wider">Reglas</p>
+              <p className="text-xl font-bold mt-1">{progress.completed || 0} <span className="text-xs text-muted font-normal">/ {progress.total || 0}</span></p>
+            </div>
+            <div className="rounded-xl bg-white/5 p-4 border border-white/10">
+              <p className="text-[10px] text-muted uppercase tracking-wider">Registros</p>
+              <p className="text-xl font-bold mt-1">{(progress.records_processed || 0).toLocaleString()} <span className="text-xs text-muted font-normal">/ {(progress.total_records || 0).toLocaleString()}</span></p>
+            </div>
+            <div className="rounded-xl bg-white/5 p-4 border border-white/10">
+              <p className="text-[10px] text-muted uppercase tracking-wider">Throughput</p>
+              <p className="text-xl font-bold mt-1 flex items-center gap-1">
+                <Activity className="w-4 h-4 text-green-400" />
+                {elapsed > 0 ? Math.round((progress.records_processed || 0) / elapsed) : 0}
+              </p>
+              <p className="text-[10px] text-muted mt-1">reg/s</p>
+            </div>
+            <div className="rounded-xl bg-white/5 p-4 border border-white/10">
+              <p className="text-[10px] text-muted uppercase tracking-wider">Estado</p>
+              <p className="text-xl font-bold mt-1 flex items-center gap-1.5">
+                <span className={`w-2 h-2 rounded-full ${isPaused ? 'bg-yellow-400' : progress.total === 0 ? 'bg-amber-400' : 'bg-green-400'} animate-pulse`} />
+                {isPaused ? 'Pausado' : progress.total === 0 ? 'Iniciando' : 'Ejecutando'}
+              </p>
+            </div>
+          </div>
+
+          {/* 3 Progress Bars */}
+          <div className="rounded-xl bg-white/5 p-4 border border-white/10 space-y-3">
+            {/* Bar 1: Rules completed */}
             <div>
-              <div className="flex justify-between text-xs text-muted mb-1">
-                <span>{progress.total > 0 ? `${progress.completed} / ${progress.total} reglas` : 'Cargando reglas...'}</span>
-                <span>{progress.total > 0 ? `${pct}%` : ''}</span>
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="w-2 h-2 rounded-full bg-indigo-500" />
+                  <span className="text-muted">Reglas</span>
+                  <span className="text-white/80 font-medium">{progress.completed || 0} / {progress.total || 0}</span>
+                </div>
+                <span className="text-xs font-semibold text-indigo-400">{rulePct}%</span>
               </div>
-              <div className="h-3 bg-white/10 rounded-full overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-500"
-                  style={{ width: `${progress.total > 0 ? Math.max(pct, 5) : 5}%` }} />
+              <div className="h-2.5 bg-white/10 rounded-full overflow-hidden">
+                <div className="h-full bg-indigo-500 rounded-full transition-all duration-500"
+                  style={{ width: `${Math.max(rulePct, progress.completed > 0 ? 3 : 0)}%` }} />
               </div>
             </div>
-            {progress.current_rule && progress.total > 0 && (
-              <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg p-3">
-                <div className="flex items-center gap-2 text-sm">
-                  <Loader2 className="w-4 h-4 animate-spin text-indigo-400 shrink-0" />
-                  <span className="text-indigo-300 font-medium">{progress.current_rule}</span>
+
+            {/* Bar 2: Current rule progress */}
+            {progress.current_rule && progress.rule_total > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2 text-xs min-w-0">
+                    <Loader2 className="w-3 h-3 animate-spin text-cyan-400 shrink-0" />
+                    <span className="text-muted truncate">{progress.current_rule}</span>
+                    {progress.rule_phase && (
+                      <span className="shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                        {progress.rule_phase === 'blocking' ? 'Bloqueo' :
+                         progress.rule_phase === 'scoring' ? 'Scoring' :
+                         progress.rule_phase === 'clustering' ? 'Agrupando' : progress.rule_phase}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-xs font-semibold text-cyan-400 shrink-0">
+                    {Math.round((progress.rule_processed / progress.rule_total) * 100)}%
+                  </span>
+                </div>
+                <div className="h-2.5 bg-white/10 rounded-full overflow-hidden">
+                  <div className="h-full bg-cyan-500 rounded-full transition-all duration-300"
+                    style={{ width: `${Math.max(Math.min((progress.rule_processed / progress.rule_total) * 100, 100), 2)}%` }} />
+                </div>
+                <div className="flex items-center gap-3 mt-1">
+                  <span className="text-[10px] text-muted">{progress.rule_processed.toLocaleString()} / {progress.rule_total.toLocaleString()}</span>
+                  {progress.rule_extra?.eta_sec > 0 && (
+                    <span className="text-[10px] text-muted">ETA {Math.floor(progress.rule_extra.eta_sec / 60)}:{(progress.rule_extra.eta_sec % 60).toString().padStart(2, '0')}</span>
+                  )}
+                  {progress.rule_extra?.total_matches > 0 && (
+                    <span className="text-[10px] text-green-400">{progress.rule_extra.total_matches.toLocaleString()} coincidencias</span>
+                  )}
                 </div>
               </div>
             )}
-            {progress.rules?.length > 0 && (
-              <div>
-                <p className="text-xs text-muted mb-2 font-medium">Reglas:</p>
-                <div className="max-h-48 overflow-y-auto space-y-1 text-xs">
-                  {progress.rules.map((r: any, i: number) => (
-                    <div key={i} className={`flex items-center gap-2 p-2 rounded-lg border ${
-                      r.status === 'running' ? 'bg-indigo-500/10 border-indigo-500/30' :
-                      r.status === 'done' ? 'bg-green-500/5 border-green-500/20' :
-                      r.status === 'failed' ? 'bg-red-500/10 border-red-500/30' :
-                      r.status === 'skipped' ? 'bg-yellow-500/5 border-yellow-500/20' :
-                      'bg-white/5 border-transparent'
-                    }`}>
-                      {r.status === 'pending' && (
-                        <div className="relative w-3.5 h-3.5 shrink-0">
-                          <div className="w-3.5 h-3.5 rounded-full border border-white/20" />
+
+            {/* Bar 3: Records analyzed */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  <span className="text-muted">Registros</span>
+                  <span className="text-white/80 font-medium">{(progress.records_processed || 0).toLocaleString()} / {(progress.total_records || 0).toLocaleString()}</span>
+                </div>
+                <span className="text-xs font-semibold text-emerald-400">{recordPct}%</span>
+              </div>
+              <div className="h-2.5 bg-white/10 rounded-full overflow-hidden">
+                <div className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                  style={{ width: `${Math.max(recordPct, (progress.records_processed || 0) > 0 ? 3 : 0)}%` }} />
+              </div>
+            </div>
+
+            {/* Overall blended percentage */}
+            <div className="flex items-center justify-between pt-2 border-t border-white/5">
+              <span className="text-[10px] text-muted uppercase tracking-wider">Progreso general</span>
+              <span className="text-sm font-bold text-white/90">{pct}%</span>
+            </div>
+          </div>
+
+          {/* Current rule details: field averages + score distribution */}
+          {progress.current_rule && progress.rule_phase === 'scoring' && progress.rule_extra && (
+            <div className="rounded-xl bg-white/5 p-4 border border-white/10 space-y-3">
+              {progress.rule_extra.field_avgs && Object.keys(progress.rule_extra.field_avgs).length > 0 && (
+                <div>
+                  <p className="text-[10px] text-muted uppercase tracking-wider mb-1.5">Promedio por campo</p>
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1.5">
+                    {Object.entries(progress.rule_extra.field_avgs as Record<string, number>).map(([field, avg]) => {
+                      const p = Math.round(avg * 100)
+                      return (
+                        <div key={field} className="flex flex-col items-center rounded-lg bg-white/5 p-1.5">
+                          <span className="text-[10px] text-muted uppercase truncate w-full text-center">{field}</span>
+                          <span className={`text-xs font-bold ${p >= 80 ? 'text-green-400' : p >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>{p}%</span>
+                          <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden mt-0.5">
+                            <div className={`h-full rounded-full ${p >= 80 ? 'bg-green-400' : p >= 50 ? 'bg-yellow-400' : 'bg-red-400'}`} style={{ width: `${p}%` }} />
+                          </div>
                         </div>
-                      )}
-                      {r.status === 'running' && <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />}
-                      {r.status === 'done' && <CheckCircle className="w-3.5 h-3.5 text-green-400 shrink-0" />}
-                      {r.status === 'failed' && <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />}
-                      {r.status === 'skipped' && <X className="w-3.5 h-3.5 text-yellow-400 shrink-0" />}
-                      <span className={
-                        r.status === 'running' ? 'text-indigo-300 font-medium' :
-                        r.status === 'done' ? 'text-green-300' :
-                        r.status === 'failed' ? 'text-red-300' :
-                        r.status === 'skipped' ? 'text-yellow-300' :
-                        'text-muted'
-                      }>{r.label}</span>
-                      {r.status === 'done' && r.failed !== undefined && (
-                        <span className={`ml-auto text-[10px] ${r.failed === 0 ? 'text-green-400' : 'text-yellow-400'}`}>
-                          {r.failed === 0 ? '✓ 0 fallos' : `${r.failed} fallos`}
-                        </span>
-                      )}
-                      {r.status === 'failed' && <span className="ml-auto text-[10px] text-red-400">Error</span>}
-                      {r.status === 'skipped' && <span className="ml-auto text-[10px] text-yellow-400">Saltada</span>}
-                      {r.status === 'pending' && (
-                        <span className="ml-auto text-[10px] text-muted">en cola</span>
-                      )}
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+              {progress.rule_extra.score_distribution && (() => {
+                const sd = progress.rule_extra.score_distribution as Record<string, number>
+                const total = (sd.bajo || 0) + (sd.medio || 0) + (sd.alto || 0)
+                if (total === 0) return null
+                const bajoPct = ((sd.bajo || 0) / total) * 100
+                const medioPct = ((sd.medio || 0) / total) * 100
+                const altoPct = ((sd.alto || 0) / total) * 100
+                return (
+                  <div>
+                    <p className="text-[10px] text-muted uppercase tracking-wider mb-1.5">Distribución de scores</p>
+                    <div className="h-2 bg-white/10 rounded-full overflow-hidden flex">
+                      <div className="h-full bg-red-500/70 transition-all" style={{ width: `${bajoPct}%` }} title={`Bajo: ${sd.bajo?.toLocaleString()}`} />
+                      <div className="h-full bg-yellow-500/70 transition-all" style={{ width: `${medioPct}%` }} title={`Medio: ${sd.medio?.toLocaleString()}`} />
+                      <div className="h-full bg-green-500/70 transition-all" style={{ width: `${altoPct}%` }} title={`Alto: ${sd.alto?.toLocaleString()}`} />
+                    </div>
+                    <div className="flex justify-between text-[9px] text-muted mt-0.5">
+                      <span>Bajo {sd.bajo?.toLocaleString()}</span>
+                      <span>Medio {sd.medio?.toLocaleString()}</span>
+                      <span>Alto {sd.alto?.toLocaleString()}</span>
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+          )}
+
+          {/* Fallback for non-scoring rules without intra-rule progress */}
+          {progress.current_rule && progress.total > 0 && !progress.rule_total && (
+            <div className="rounded-xl bg-white/5 p-4 border border-white/10">
+              <div className="flex items-center gap-2 text-sm">
+                <Loader2 className="w-4 h-4 animate-spin text-indigo-400 shrink-0" />
+                <span className="text-indigo-300 font-medium">{progress.current_rule}</span>
+                <span className="text-xs text-muted ml-auto">{progress.rule_message}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Rules table */}
+          {progress.rules?.length > 0 && (
+            <div className="rounded-xl bg-white/5 border border-white/10 overflow-hidden">
+              <div className="flex items-center gap-2 p-3 border-b border-white/10">
+                <List className="w-3.5 h-3.5 text-muted" />
+                <span className="text-xs font-medium text-muted">Reglas ({progress.rules.length})</span>
+              </div>
+              <div className="max-h-48 overflow-y-auto divide-y divide-white/5">
+                {progress.rules.map((r: any, i: number) => (
+                  <div key={i} className="flex items-center gap-2 p-2.5 text-xs">
+                    {r.status === 'pending' && <div className="w-3 h-3 rounded-full border border-white/20 shrink-0" />}
+                    {r.status === 'running' && <Loader2 className="w-3 h-3 animate-spin text-indigo-400 shrink-0" />}
+                    {r.status === 'done' && <CheckCircle className="w-3 h-3 text-green-400 shrink-0" />}
+                    {r.status === 'failed' && <AlertCircle className="w-3 h-3 text-red-400 shrink-0" />}
+                    {r.status === 'skipped' && <X className="w-3 h-3 text-yellow-400 shrink-0" />}
+                    <span className={`truncate flex-1 ${r.status === 'running' ? 'text-indigo-300 font-medium' : r.status === 'done' ? 'text-green-300' : r.status === 'failed' ? 'text-red-300' : r.status === 'skipped' ? 'text-yellow-300' : 'text-muted'}`}>
+                      {r.label}
+                    </span>
+                    <span className="text-[10px] text-muted shrink-0">{(r.rule_records_processed || 0).toLocaleString()}</span>
+                    {r.status === 'done' && r.failed !== undefined && (
+                      <span className={`shrink-0 text-[10px] ${r.failed === 0 ? 'text-green-400' : 'text-yellow-400'}`}>
+                        {r.failed === 0 ? '✓' : `${r.failed}`}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Live logs */}
+          {liveLogs.length > 0 && (
+            <div className="rounded-xl bg-white/5 border border-white/10 overflow-hidden">
+              <button onClick={() => setLogOpen(!logOpen)} className="flex items-center gap-2 p-3 w-full text-left border-b border-white/10">
+                {logOpen ? <ChevronDown className="w-3.5 h-3.5 text-muted" /> : <ChevronRight className="w-3.5 h-3.5 text-muted" />}
+                <span className="text-xs font-medium text-muted">Log en vivo ({liveLogs.length})</span>
+              </button>
+              {logOpen && (
+                <div className="max-h-64 overflow-y-auto p-3 space-y-1 font-mono text-[11px] leading-relaxed">
+                  {liveLogs.map((msg, i) => (
+                    <div key={i} className="text-white/70 hover:text-white/90 transition-colors">
+                      <span className="text-indigo-400 mr-2">&gt;</span>{msg}
                     </div>
                   ))}
+                  <div ref={logsEndRef} />
                 </div>
-              </div>
-            )}
-          </div>
-        </GlassContainer>
+              )}
+            </div>
+          )}
+        </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
           <GlassContainer className="lg:col-span-2">
@@ -662,7 +883,7 @@ export default function ProcessDetail() {
         </GlassContainer>
       )}
 
-      {!isRunning && process.status !== 'failed' && (
+      {!isRunning && !isCancelled && process.status !== 'failed' && (
         <GlassContainer>
           <h2 className="text-xl font-semibold mb-6">Reportes ({reports.length})</h2>
           {reports.length > 0 ? (

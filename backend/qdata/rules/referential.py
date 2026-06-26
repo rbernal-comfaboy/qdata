@@ -34,7 +34,7 @@ class ReferentialIntegrityCheck(Rule):
                     "total": len(child_vals),
                     "pct": round(n_orphans / len(child_vals) * 100, 2),
                 })
-                for val in orphans.head(5):
+                for val in orphans:
                     sample_failures.append({
                         "column": child_col,
                         "value": str(val),

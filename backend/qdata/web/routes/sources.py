@@ -302,10 +302,8 @@ async def preview_source(
     if not ds:
         raise HTTPException(status_code=404, detail="Data source not found")
 
-    limit = s.row_limit or 100
-
     try:
-        kwargs = {"nrows": limit + 1} if ds.source_type in ("csv", "excel", "json", "parquet") else {}
+        kwargs = {"nrows": 11}
         kwargs["storage_mode"] = s.storage_mode or "memory"
         df = load_data(ds.source_type, ds.connection_string or "", s.query or "", ds.file_path or "", **kwargs)
     except Exception as e:
@@ -340,7 +338,7 @@ async def _preview_data(s: Source) -> dict | None:
         if not ds:
             return None
         try:
-            kwargs = {"nrows": 101} if ds.source_type in ("csv", "excel", "json", "parquet") else {}
+            kwargs = {"nrows": 11}
             kwargs["storage_mode"] = s.storage_mode or "memory"
             df = load_data(ds.source_type, ds.connection_string or "", s.query or "", ds.file_path or "", **kwargs)
             if df.empty:

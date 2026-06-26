@@ -24,7 +24,7 @@ RULE_METADATA = {
     "distributions": {"label": "Distribuciones", "group": "basico", "severity": "warning", "desc": "Evalúa normalidad, asimetría y curtosis"},
     "correlations": {"label": "Correlaciones", "group": "basico", "severity": "warning", "desc": "Detecta multicolinealidad entre variables numéricas"},
     "email_valid": {"label": "Email válido", "group": "formato", "severity": "error", "desc": "Valida formato de correo electrónico RFC 5322"},
-    "special_chars": {"label": "Caracteres especiales", "group": "formato", "severity": "warning", "desc": "Detecta caracteres de control y zero-width"},
+    "special_chars": {"label": "Caracteres especiales", "group": "formato", "severity": "warning", "desc": "Detecta caracteres de control, zero-width, uso privado, seguridad y espacios no estándar"},
     "string_length": {"label": "Longitud de cadenas", "group": "formato", "severity": "error", "desc": "Verifica longitud de cadenas en rango esperado"},
     "trim_check": {"label": "Espacios extra", "group": "formato", "severity": "warning", "desc": "Detecta espacios leading/trailing"},
     "case_check": {"label": "Consistencia mayúsculas", "group": "formato", "severity": "warning", "desc": "Detecta mezcla inconsistente de mayúsculas/minúsculas"},
@@ -52,6 +52,7 @@ RULE_METADATA = {
     "fuzzy_id_match": {"label": "ID/Cédula similar (fuzzy)", "group": "personas", "severity": "warning", "desc": "Detecta registros con ID/cédula con 1-2 dígitos diferentes"},
     "similar_dob": {"label": "Fecha de nacimiento cercana", "group": "personas", "severity": "warning", "desc": "Detecta registros con fechas de nacimiento en ventana de ±3 días"},
     "person_composite_similarity": {"label": "Score compuesto de persona", "group": "personas", "severity": "warning", "desc": "Combina nombre+ID+DOB+dirección+teléfono en un score único para detectar la misma persona"},
+    "personas_similares": {"label": "Buscar Persona", "group": "personas_similares", "severity": "warning", "desc": "Detecta personas potencialmente duplicadas combinando nombre, ID, fecha de nacimiento, dirección, teléfono y email (modos: rápido y profundo)"},
 }
 
 GROUP_METADATA = {
@@ -61,7 +62,7 @@ GROUP_METADATA = {
     "negocio": {"label": "Reglas de negocio", "icon": "Briefcase", "desc": "Validación de lógica de negocio y consistencia interna"},
     "avanzadas": {"label": "Avanzadas", "icon": "Cpu", "desc": "Técnicas estadísticas avanzadas y machine learning"},
     "integridad": {"label": "Integridad", "icon": "Link", "desc": "Integridad de datos a nivel de tabla y volumen"},
-    "personas": {"label": "Personas duplicadas", "icon": "Users", "desc": "Detecta registros de la misma persona con pequeñas diferencias en nombre, ID, fecha de nacimiento, dirección o teléfono"},
+    "personas_similares": {"label": "Personas similares", "icon": "Users", "desc": "Detecta personas potencialmente duplicadas con modo rápido o profundo"},
     "todo": {"label": "Todas las reglas", "icon": "List", "desc": "Ejecuta todas las reglas disponibles"},
 }
 

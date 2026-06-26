@@ -24,7 +24,7 @@ class RowCompletenessCheck(Rule):
         details = [{"total_rows": total, "avg_completeness_pct": avg_completeness, "min_completeness_pct": round(float(completeness.min()), 2), "sparse_rows": n_fail, "sparse_pct": round(n_fail / total * 100, 2)}]
         sample_failures = []
         if n_fail:
-            for idx in sparse[sparse].head(10).index:
+            for idx in sparse[sparse].index:
                 null_cols = df.columns[df.loc[idx].isna()].tolist()
                 sample_failures.append({"row": int(idx), "completeness_pct": round(float(completeness.loc[idx]), 2), "null_columns": null_cols[:10]})
         passed = n_fail == 0
@@ -53,7 +53,7 @@ class MultivariateOutlierCheck(Rule):
             details = [{"columns_used": list(num_df.columns), "total_analyzed": len(num_df), "outliers": n_fail, "pct": round(n_fail / len(num_df) * 100, 2)}]
             sample_failures = []
             if n_fail:
-                outlier_idx = np.where(preds == -1)[0][:10]
+                outlier_idx = np.where(preds == -1)[0][:500]
                 for idx in outlier_idx:
                     row_data = {c: round(float(num_df.iloc[idx][c]), 2) for c in num_df.columns[:5]}
                     sample_failures.append({"row": int(num_df.index[idx]), "values": row_data})

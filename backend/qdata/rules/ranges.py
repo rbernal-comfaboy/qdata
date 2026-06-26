@@ -74,10 +74,10 @@ class RangeCheck(Rule):
                     "upper_bound": round(upper, 4),
                 })
                 samples = conn.execute(
-                    f"SELECT {quoted} FROM data WHERE {quoted} IS NOT NULL AND ({quoted} < {lower} OR {quoted} > {upper}) LIMIT 5"
+                    f"SELECT rowid, {quoted} FROM data WHERE {quoted} IS NOT NULL AND ({quoted} < {lower} OR {quoted} > {upper}) LIMIT 500"
                 ).fetchall()
                 for row_data in samples:
-                    sample_failures.append({"column": col, "row": 0, "value": float(row_data[0])})
+                    sample_failures.append({"column": col, "row": int(row_data[0]), "value": float(row_data[1])})
 
         failed = issue_count
         passed = failed == 0
@@ -145,7 +145,7 @@ class RangeCheck(Rule):
                     "lower_bound": round(float(lower), 4),
                     "upper_bound": round(float(upper), 4),
                 })
-                for idx in combined.head(5).index:
+                for idx in combined.index:
                     sample_failures.append({
                         "column": col,
                         "row": int(idx),

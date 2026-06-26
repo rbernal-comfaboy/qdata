@@ -140,7 +140,7 @@ export default function ReportDetail() {
           <div className="flex items-center gap-6">
             <QualityGauge score={report.score} size={150} />
             <div>
-              <p className="text-3xl font-bold text-white mb-1">{report.score}/100</p>
+              <p className="text-3xl font-bold text-white mb-1">{Number(report.score).toFixed(2)}/100</p>
               <span className={`text-lg ${report.score >= 70 ? 'text-green-400' : report.score >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
                 {getScoreLabel(report.score)}
               </span>
@@ -192,7 +192,7 @@ export default function ReportDetail() {
               >
                 <div className="flex items-start gap-3">
                   <QualityGauge
-                    score={rule.total > 0 ? 100 - rule.failure_pct : 100}
+                    score={rule.total > 0 ? Math.round((100 - (rule.failure_pct ?? 0)) * 100) / 100 : 100}
                     size={56}
                   />
                   <div className="flex-1 min-w-0">
@@ -200,7 +200,7 @@ export default function ReportDetail() {
                       <p className="text-white font-medium">{rule.rule_name}</p>
                       <span className={`badge badge-${rule.severity}`}>{rule.severity}</span>
                       <span className={`text-sm ${rule.passed ? 'text-green-400' : 'text-red-400'}`}>
-                        {rule.failed}/{rule.total} ({rule.failure_pct}%)
+                        {rule.failed}/{rule.total} ({(rule.failure_pct ?? 0).toFixed(2)}%)
                       </span>
                     </div>
                     <p className="text-muted text-sm mt-1">{rule.description}</p>

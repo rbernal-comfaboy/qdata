@@ -18,25 +18,57 @@ router = APIRouter()
 
 @router.get("/")
 async def list_reports(
+    group_id: str | None = None,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     limit: int = 20,
     offset: int = 0,
 ):
-    result = await session.execute(
+    query = (
         select(Report)
         .options(joinedload(Report.project))
         .where(Report.user_id == user.id)
-        .order_by(Report.executed_at.desc())
-        .offset(offset)
-        .limit(limit)
+    )
+    if group_id:
+        query = query.where(Report.project.has(group_id=group_id))
+    result = await session.execute(
+        query.order_by(Report.executed_at.desc()).offset(offset).limit(limit)
     )
     reports = result.unique().scalars().all()
+
+    def _extract_names(sc: dict | None):
+        if not sc:
+            return None, None, None
+        st = sc.get("source_type") or ""
+        cs = sc.get("connection_string") or ""
+        fp = sc.get("file_path") or ""
+        query = sc.get("query") or ""
+        table_name = None
+        if query:
+            import re as _re
+            m = _re.search(r"FROM\s+[`\"']?(\w+)[`\"']?", query, _re.IGNORECASE)
+            if m:
+                table_name = m.group(1).upper()
+        if st in ("mysql", "postgresql", "sqlite", "mssql"):
+            source_label = table_name or st.upper()
+            db_name = cs.rsplit("/", 1)[-1].split("?")[0] if "/" in cs else None
+            connection_label = db_name.upper() if db_name else cs
+        elif st == "file":
+            source_label = "Archivo"
+            connection_label = fp.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] if fp else None
+        else:
+            source_label = st or "Desconocido"
+            connection_label = cs or fp or None
+        return source_label, connection_label, st
+
     return [
         {
             "id": str(r.id),
             "project_id": str(r.project_id),
             "project_name": r.project.name if r.project else None,
+            "source_type": _extract_names(r.project.source_config if r.project else None)[2],
+            "source_label": _extract_names(r.project.source_config if r.project else None)[0],
+            "connection_label": _extract_names(r.project.source_config if r.project else None)[1],
             "score": r.score,
             "label": r.label,
             "summary": r.summary,
@@ -163,7 +195,11 @@ async def export_report_excel(
         sample_failures = r.get("sample_failures", [])
 
         # Section: Regla header
-        ws3.cell(row_idx, 1, f"Regla: {rname}").font = Font(bold=True, size=12)
+        total_failed = r.get("failed", 0)
+        total_items = r.get("total", 0)
+        failure_pct = r.get("failure_pct", 0)
+        header_text = f"Regla: {rname}  —  {total_failed:,} errores de {total_items:,} registros ({failure_pct:.2f}%)"
+        ws3.cell(row_idx, 1, header_text).font = Font(bold=True, size=12)
         row_idx += 1
 
         # Sub-section: Resumen por columna
@@ -176,19 +212,59 @@ async def export_report_excel(
 
         # Sub-section: Errores detallados
         if sample_failures:
-            for ci, h in enumerate(detail_headers, 1):
+            n_sample = len(sample_failures)
+            note_text = (
+                f"Mostrando {n_sample:,} de {total_failed:,} errores"
+                if total_failed > n_sample else
+                f"{n_sample:,} errores"
+            )
+            ws3.cell(row_idx, 1, note_text).font = Font(italic=True, size=9, color="888888")
+            row_idx += 1
+            # Get union of all keys in item.get("values") to display them as columns
+            record_keys = []
+            for item in sample_failures:
+                vals = item.get("values")
+                if vals and isinstance(vals, dict):
+                    for k in vals.keys():
+                        if k not in record_keys:
+                            record_keys.append(k)
+
+            headers = detail_headers + record_keys
+            for ci, h in enumerate(headers, 1):
                 c = ws3.cell(row_idx, ci, h)
                 c.font = header_font
                 c.fill = header_fill
             row_idx += 1
-            for i, item in enumerate(sample_failures):
+
+            error_counter = 0
+            group_to_num = {}
+
+            for item in sample_failures:
                 info = describe_error(rname, item, recommendation)
-                ws3.cell(row_idx, 1, i + 1)
+                
+                group_idx = item.get("group_idx")
+                if group_idx is not None:
+                    if group_idx not in group_to_num:
+                        error_counter += 1
+                        group_to_num[group_idx] = error_counter
+                    current_err_num = group_to_num[group_idx]
+                else:
+                    error_counter += 1
+                    current_err_num = error_counter
+
+                ws3.cell(row_idx, 1, current_err_num)
                 ws3.cell(row_idx, 2, info.get("fila") or "—")
                 ws3.cell(row_idx, 3, info.get("columna") or "—")
                 ws3.cell(row_idx, 4, info.get("valor") or "—")
                 ws3.cell(row_idx, 5, info.get("descripcion") or "")
                 ws3.cell(row_idx, 6, info.get("sugerencia") or "")
+                
+                # Write original record column values
+                vals = item.get("values", {})
+                for ki, k in enumerate(record_keys, 7):
+                    val = vals.get(k)
+                    ws3.cell(row_idx, ki, str(val) if val is not None else "—")
+
                 row_idx += 1
         else:
             ws3.cell(row_idx, 1, "Sin errores de muestra")

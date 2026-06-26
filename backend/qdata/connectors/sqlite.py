@@ -3,6 +3,8 @@ import pandas as pd
 
 from qdata.connectors.base import Connector
 
+_FETCH_SIZE = 10_000
+
 
 class SQLiteConnector(Connector):
     def __init__(self, path: str):
@@ -10,9 +12,24 @@ class SQLiteConnector(Connector):
         self.path = path
         self.engine = create_engine(self.connection_string)
 
-    def load(self, query: str) -> pd.DataFrame:
+    def load(self, query: str, progress_callback=None) -> pd.DataFrame:
         with self.engine.connect() as conn:
-            return pd.read_sql(text(query), conn)
+            if not progress_callback:
+                return pd.read_sql(text(query), conn)
+            result = conn.execution_options(stream_results=True).execute(text(query))
+            chunks = []
+            loaded = 0
+            while True:
+                rows = result.fetchmany(_FETCH_SIZE)
+                if not rows:
+                    break
+                chunk = pd.DataFrame(rows, columns=result.keys())
+                chunks.append(chunk)
+                loaded += len(chunk)
+                progress_callback(loaded, loaded, f"Leyendo registros... {loaded:,}")
+            df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+            progress_callback(len(df), len(df), "Datos cargados")
+            return df
 
     def schema(self) -> list[dict]:
         inspector = inspect(self.engine)
@@ -32,4 +49,5 @@ class SQLiteConnector(Connector):
         tables = inspector.get_table_names()
         if not tables:
             return pd.DataFrame()
-        return self.load(f"SELECT * FROM {tables[0]} LIMIT {n}")
+        query = f"SELECT * FROM {tables[0]} LIMIT {n}"
+        return self.load(query)

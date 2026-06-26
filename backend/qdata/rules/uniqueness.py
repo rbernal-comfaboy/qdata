@@ -34,7 +34,7 @@ class UniqueCheck(Rule):
                     "pct": round(n_dupes / len(df) * 100, 2),
                     "unique_values": int(df[col].nunique()),
                 })
-                for idx in df[dupes].drop_duplicates(subset=col).head(3).index:
+                for idx in df[dupes].drop_duplicates(subset=col).index:
                     sample_failures.append({
                         "column": col,
                         "row": int(idx),

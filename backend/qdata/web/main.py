@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from qdata.core.config import settings
-from qdata.web.routes import auth, analyze, reports, rules, synthetic, scheduler as scheduler_router, upload, processes, datasources, sources
+from qdata.web.routes import auth, analyze, reports, rules, synthetic, scheduler as scheduler_router, upload, processes, datasources, sources, groups
 from qdata.scheduler.service import start_scheduler, stop_scheduler
 
 
@@ -42,6 +42,7 @@ app.include_router(upload.router, prefix="/upload", tags=["Upload"])
 app.include_router(processes.router, prefix="/processes", tags=["Processes"])
 app.include_router(datasources.router, prefix="/datasources", tags=["DataSources"])
 app.include_router(sources.router, prefix="/sources", tags=["Sources"])
+app.include_router(groups.router, prefix="/api", tags=["Groups"])
 
 
 @app.get("/health")

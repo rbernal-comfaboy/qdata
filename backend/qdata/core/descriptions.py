@@ -11,7 +11,7 @@ SUGERENCIAS: dict[str, str] = {
     "correlation_check": "Considerar eliminar variables correlacionadas o usar PCA",
     "distribution_check": "Aplicar transformación logarítmica o Box-Cox",
     "email_check": "Corregir formato de email: usuario@dominio.tld",
-    "special_chars_check": "Limpiar caracteres de control y zero-width Unicode",
+    "special_chars_check": "Remover caracteres problemáticos: control, zero-width, uso privado, seguridad y espacios no estándar",
     "string_length_check": "Ajustar longitud al rango esperado",
     "trim_check": "Aplicar .trim() para eliminar espacios extras",
     "case_consistency_check": "Uniformar a mayúsculas o minúsculas según el estándar",
@@ -83,15 +83,27 @@ def describe_error(rule_name: str, item: dict, recommendation: str | None = None
         }
 
     if rule_name == "duplicate_check":
-        vals = item.get("values")
-        if vals:
-            parts = [f"{k}={v}" for k, v in list(vals.items())[:4]]
-            desc = "Fila duplicada: " + ", ".join(parts)
-            val = ", ".join(f"{k}: {v}" for k, v in list(vals.items())[:6])
+        rows = item.get("rows") or []
+        count = len(rows)
+        row_nums = []
+        for r in rows:
+            rv = r.get("row")
+            if rv is not None:
+                row_nums.append(str(rv + 2))
+        if len(row_nums) <= 5:
+            display_rows = ", ".join(row_nums)
         else:
-            desc = "Fila duplicada"
+            display_rows = f"{row_nums[0]}, {row_nums[1]}, … (+{len(row_nums) - 2} más)"
+        first = rows[0] if rows else {}
+        vals = first.get("values") if first else None
+        if vals:
+            parts = [f"{k}={v}" for k, v in list(vals.items())[:3]]
+            desc = f"Grupo duplicado ({count} filas): " + ", ".join(parts)
+            val = ", ".join(f"{k}: {v}" for k, v in list(vals.items())[:5])
+        else:
+            desc = "Filas duplicadas"
             val = None
-        return {"descripcion": desc, "sugerencia": sug, "fila": fila, "columna": None, "valor": val}
+        return {"descripcion": desc, "sugerencia": sug, "fila": display_rows or None, "columna": None, "valor": val}
 
     if rule_name == "range_check":
         return {

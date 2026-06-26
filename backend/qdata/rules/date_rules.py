@@ -44,7 +44,7 @@ class InvalidDateCheck(Rule):
                 failed += n_fail
                 invalid_mask = parsed.isna()
                 details.append({"column": col, "failed": n_fail, "total": len(raw), "pct": round(n_fail / len(raw) * 100, 2)})
-                for idx in raw[invalid_mask].head(5).index:
+                for idx in raw[invalid_mask].index:
                     sample_failures.append({"column": col, "row": int(idx), "value": str(raw.loc[idx])})
         passed = failed == 0
         rec = None if passed else "Corregir fechas mal formadas. Usar formato ISO 8601 (YYYY-MM-DD)"
@@ -72,7 +72,7 @@ class DateRangeCheck(Rule):
             if n_fail:
                 failed += n_fail
                 details.append({"column": col, "failed": n_fail, "total": len(series), "pct": round(n_fail / len(series) * 100, 2), "before_min": int(too_early.sum()), "after_max": int(too_late.sum())})
-                for idx in comb[comb].head(5).index:
+                for idx in comb[comb].index:
                     sample_failures.append({"column": col, "row": int(idx), "value": str(series.loc[idx])})
         passed = failed == 0
         rec = None if passed else f"Revisar fechas fuera del rango [{self.min_year}, {self.max_date.date()}]"
@@ -103,7 +103,7 @@ class DateInconsistencyCheck(Rule):
                     n_fail = int(gt.sum())
                     failed += n_fail
                     details.append({"column_pair": f"{c1} > {c2}", "failed": n_fail, "total": n_valid, "pct": round(n_fail / n_valid * 100, 2)})
-                    for idx in gt[gt].head(5).index:
+                    for idx in gt[gt].index:
                         sample_failures.append({"row": int(idx), "col1": c1, "val1": str(s1.loc[idx]), "col2": c2, "val2": str(s2.loc[idx])})
         passed = failed == 0
         rec = None if passed else "Revisar pares de fechas inconsistentes. Verificar que fechas_initio <= fechas_fin"
@@ -130,7 +130,7 @@ class FreshnessCheck(Rule):
             if n_fail:
                 failed += n_fail
                 details.append({"column": col, "failed": n_fail, "total": len(series), "pct": round(n_fail / len(series) * 100, 2), "oldest": str(series.min()), "newest": str(series.max())})
-                for idx in old[old].head(5).index:
+                for idx in old[old].index:
                     sample_failures.append({"column": col, "row": int(idx), "value": str(series.loc[idx])})
         passed = failed == 0
         rec = None if passed else f"Datos anteriores a {self.max_days_old} días. Verificar frescura de la fuente"
@@ -162,7 +162,7 @@ class LatencyCheck(Rule):
         details = [{"event_col": self.event_col, "ingest_col": self.ingest_col, "failed": n_fail, "total": n_valid, "pct": round(n_fail / n_valid * 100, 2), "max_latency_h": round(float(latency_h.max()), 2), "avg_latency_h": round(float(latency_h.mean()), 2)}]
         sample_failures = []
         if n_fail:
-            for idx in high_latency[high_latency].head(5).index:
+            for idx in high_latency[high_latency].index:
                 sample_failures.append({"row": int(idx), "event": str(event.loc[idx]), "ingest": str(ingest.loc[idx]), "latency_h": round(float(latency_h.loc[idx]), 2)})
         passed = n_fail == 0
         rec = None if passed else f"Latencia promedio de {details[0]['avg_latency_h']:.1f}h. Revisar pipeline de ingesta"

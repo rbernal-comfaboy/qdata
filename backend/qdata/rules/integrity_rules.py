@@ -89,7 +89,7 @@ class MissingFKCheck(Rule):
                 if n_fail:
                     failed += n_fail
                     details.append({"column": fk_col, "orphans": n_fail, "total": len(fk_vals), "pct": round(n_fail / len(fk_vals) * 100, 2)})
-                    for idx in fk_vals[orphaned].head(5).index:
+                    for idx in fk_vals[orphaned].index:
                         sample_failures.append({"column": fk_col, "row": int(idx), "value": str(fk_vals.loc[idx])})
         passed = failed == 0
         rec = None if passed else f"{failed} valores huérfanos en columnas FK. Verificar integridad referencial"

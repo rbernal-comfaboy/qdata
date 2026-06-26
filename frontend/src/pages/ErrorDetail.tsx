@@ -1,9 +1,9 @@
 ﻿import { useState, useMemo } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   ArrowLeft, AlertTriangle, Search, Wrench, Lightbulb,
-  Database, Copy, Users, ExternalLink,
+  Database, Copy, Users, ExternalLink, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
@@ -15,6 +15,7 @@ const severityColors: Record<string, string> = {
 
 const GROUP_RULE_TYPES: Record<string, string> = {
   person_composite_similarity: 'person_composite_groups',
+  personas_similares: 'personas_similares_groups',
   fuzzy_name_match: 'fuzzy_name_groups',
   fuzzy_id_match: 'fuzzy_id_groups',
   similar_dob: 'similar_dob_groups',
@@ -58,6 +59,7 @@ function getErrorExplanation(ruleName: string): { meaning: string; steps: string
     functional_dependency_check: { meaning: 'Se violó una dependencia funcional.', steps: ['Identifica los pares que violan.', 'Determina el valor correcto.', 'Agrega restricción UNIQUE.'] },
     derived_column_check: { meaning: 'Columna calculada no coincide con el valor esperado.', steps: ['Verifica la fórmula.', 'Recalcula la columna.', 'Automatiza verificación en ETL.'] },
     person_composite_similarity: { meaning: 'Registros que podrían ser la misma persona con variaciones.', steps: ['Revisa cada grupo manualmente.', 'Si es la misma persona, unifica.', 'Ajusta el threshold si hay muchos falsos positivos.'] },
+    personas_similares: { meaning: 'Se detectaron registros que parecen ser la misma persona pero con errores de captura o variaciones en los datos.', steps: ['Compara lado a lado los registros del grupo.', 'Identifica cuáles son duplicados reales.', 'Unifica los registros duplicados manteniendo los datos más completos.', 'Si hay falsos positivos, ajusta el threshold o las columnas de comparación.'] },
     fuzzy_name_match: { meaning: 'Registros con nombres muy similares.', steps: ['Revisa los pares.', 'Si es la misma persona corrige el nombre.', 'Si son diferentes, sube el threshold.'] },
     fuzzy_id_match: { meaning: 'IDs muy similares con 1-2 dígitos de diferencia.', steps: ['Compara dígito por dígito.', 'Si es el mismo, corrige.', 'Agrega validación de dígito verificador.'] },
     similar_dob: { meaning: 'Fechas de nacimiento muy cercanas.', steps: ['Revisa si es la misma persona con error en el día.', 'Ajusta window_days si hay muchos falsos positivos.'] },
@@ -69,10 +71,31 @@ function renderVal(v: any) {
   if (v === null || v === undefined) return <span className="text-muted italic">NULL</span>
   if (Array.isArray(v)) return v.join(', ')
   if (typeof v === 'object') return JSON.stringify(v)
-  return String(v)
+  const s = String(v)
+  const SPECIAL_CHARS: Record<string, string> = {
+    '\u00A0': '\\u00A0(NBSP)', '\u200B': '\\u200B(ZWSP)', '\u200C': '\\u200C(ZWNJ)',
+    '\u200D': '\\u200D(ZWJ)', '\uFEFF': '\\uFEFF(BOM)', '\u202A': '\\u202A(LRE)',
+    '\u202B': '\\u202B(RLE)', '\u202C': '\\u202C(PDF)', '\u202D': '\\u202D(LRO)',
+    '\u202E': '\\u202E(RLO)', '\u2066': '\\u2066(LRI)', '\u2067': '\\u2067(RLI)',
+    '\u2068': '\\u2068(FSI)', '\u2069': '\\u2069(PDI)',
+    '\u2000': '\\u2000', '\u2001': '\\u2001', '\u2002': '\\u2002', '\u2003': '\\u2003',
+    '\u2004': '\\u2004', '\u2005': '\\u2005', '\u2006': '\\u2006', '\u2007': '\\u2007',
+    '\u2008': '\\u2008', '\u2009': '\\u2009', '\u200A': '\\u200A', '\u202F': '\\u202F',
+    '\u205F': '\\u205F', '\u3000': '\\u3000',
+  }
+  let result = ''
+  for (const ch of s) {
+    if (SPECIAL_CHARS[ch]) {
+      result += SPECIAL_CHARS[ch]
+    } else {
+      result += ch
+    }
+  }
+  return result
 }
 
 export default function ErrorDetail() {
+  const navigate = useNavigate()
   const { reportId, ruleIdx, errorIdx } = useParams<{ reportId: string; ruleIdx: string; errorIdx: string }>()
   const ri = parseInt(ruleIdx || '0')
   const ei = parseInt(errorIdx || '0')
@@ -99,7 +122,9 @@ export default function ErrorDetail() {
 
   const info = describeError(rule.rule_name, item, rule.recommendation)
   const explanation = getErrorExplanation(rule.rule_name)
-  const fullRecord = item.values || null
+  const isDuplicateGroup = rule.rule_name === 'duplicate_check' && item.rows?.length > 0
+  const duplicateGroupRows = isDuplicateGroup ? item.rows : []
+  const fullRecord = isDuplicateGroup ? (duplicateGroupRows[0]?.values || null) : (item.values || null)
   const recordEntries = fullRecord ? Object.entries(fullRecord) : []
   const groupMembers = getGroupMembers(rule, item)
   const [copied, setCopied] = useState(false)
@@ -140,10 +165,28 @@ export default function ErrorDetail() {
       </Link>
 
       <GlassContainer>
-        <div className="flex items-center gap-3 mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-white">{rule.rule_name}</h1>
-            <p className="text-muted text-sm mt-1">Error #{ei + 1} de {failures.length}</p>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div>
+              <h1 className="text-2xl font-bold text-white">{rule.rule_name}</h1>
+              <p className="text-muted text-sm mt-1">Error #{ei + 1} de {failures.length}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => navigate(`/reports/${reportId}/rules/${ruleIdx}/errors/${Math.max(0, ei - 1)}`)}
+              disabled={ei === 0}
+              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronLeft className="w-4 h-4 text-white" />
+            </button>
+            <button
+              onClick={() => navigate(`/reports/${reportId}/rules/${ruleIdx}/errors/${Math.min(failures.length - 1, ei + 1)}`)}
+              disabled={ei >= failures.length - 1}
+              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronRight className="w-4 h-4 text-white" />
+            </button>
           </div>
         </div>
 
@@ -185,7 +228,38 @@ export default function ErrorDetail() {
             </div>
           </div>
 
-          {recordEntries.length > 0 && (
+          {isDuplicateGroup && (
+            <div>
+              <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                <Users className="w-4 h-4 text-purple-400" />
+                Registros duplicados ({duplicateGroupRows.length})
+              </h3>
+              <div className="bg-white/5 rounded-xl overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-white/10">
+                      <th className="text-left p-2.5 text-muted font-medium">#</th>
+                      {recordEntries.map(([key]) => <th key={key} className="text-left p-2.5 text-muted font-medium whitespace-nowrap">{key}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {duplicateGroupRows.map((member: any, mi: number) => {
+                      const vals = member.values || {}
+                      const isCurrent = member.row === item.row
+                      return (
+                        <tr key={mi} className={'border-b border-white/5 last:border-0 ' + (isCurrent ? 'bg-indigo-500/20' : '')}>
+                          <td className="p-2.5 text-muted font-mono">{member.row != null ? Number(member.row) + 2 : mi + 1}</td>
+                          {recordEntries.map(([key]) => <td key={key} className="p-2.5 text-white font-mono whitespace-nowrap">{renderVal(vals[key])}</td>)}
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {!isDuplicateGroup && recordEntries.length > 0 && (
             <div>
               <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
                 <Database className="w-4 h-4 text-cyan-400" />

@@ -38,7 +38,7 @@ class CrossConsistencyCheck(Rule):
             if n_fail:
                 failed += n_fail
                 details.append({"rule": label, "failed": n_fail, "total": len(result), "pct": round(n_fail / len(result) * 100, 2)})
-                for idx in result[~result].head(5).index:
+                for idx in result[~result].index:
                     sample_failures.append({"row": int(idx), "rule": label})
         passed = failed == 0
         rec = None if passed else "Revisar violaciones de consistencia cruzada. Verificar cálculos y relaciones entre columnas"
@@ -77,8 +77,8 @@ class FunctionalDependencyCheck(Rule):
             if n_fail:
                 failed += n_fail
                 details.append({"determinant": det_col, "dependent": dep_col, "failed": n_fail, "total": len(grouped), "pct": round(n_fail / len(grouped) * 100, 2)})
-                for det_val in violations.head(5).index:
-                    rows = df[df[det_col] == det_val][[det_col, dep_col]].head(3)
+                for det_val in violations.index:
+                    rows = df[df[det_col] == det_val][[det_col, dep_col]]
                     for _, r in rows.iterrows():
                         sample_failures.append({"determinant": det_col, "value": str(r[det_col]), "dependent": dep_col, "dep_values": str(r[dep_col])})
         passed = failed == 0
@@ -193,7 +193,7 @@ class DerivedColumnCheck(Rule):
             if n_fail:
                 failed += n_fail
                 details.append({"column": target_col, "failed": n_fail, "total": n_valid, "pct": round(n_fail / n_valid * 100, 2), "max_deviation_pct": round(float(diff_pct[mismatch].max()), 2)})
-                for idx in mismatch[mismatch].head(5).index:
+                for idx in mismatch[mismatch].index:
                     sample_failures.append({"row": int(idx), "column": target_col, "actual": float(actual.loc[idx]), "expected": float(expected.loc[idx]), "diff_pct": round(float(diff_pct.loc[idx]), 2)})
         passed = failed == 0
         rec = None if passed else "Revisar columnas derivadas que no coinciden con su fórmula de cálculo"

@@ -17,7 +17,7 @@ export default function Dashboard() {
 
   const stats = [
     { label: 'Reportes', value: reports?.length ?? 0, icon: FileText, color: 'text-blue-400' },
-    { label: 'Score Promedio', value: latest ? `${score}/100` : '-', icon: CheckCircle, color: 'text-green-400' },
+    { label: 'Score Promedio', value: latest ? `${Number(score).toFixed(2)}/100` : '-', icon: CheckCircle, color: 'text-green-400' },
     { label: 'Críticos', value: reports?.filter((r: any) => r.label === 'critico').length ?? 0, icon: AlertTriangle, color: 'text-red-400' },
     { label: 'Último Análisis', value: latest ? formatDate(latest.executed_at) : '-', icon: Clock, color: 'text-yellow-400' },
   ]
@@ -103,7 +103,7 @@ export default function Dashboard() {
                     <td className="p-3 text-white text-sm font-mono">{r.id.slice(0, 8)}...</td>
                     <td className="p-3">
                       <span className={r.score >= 70 ? 'text-green-400' : r.score >= 50 ? 'text-yellow-400' : 'text-red-400'}>
-                        {r.score}
+                        {Number(r.score).toFixed(2)}
                       </span>
                     </td>
                     <td className="p-3">

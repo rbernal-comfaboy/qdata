@@ -46,7 +46,7 @@ class PatternCheck(Rule):
                     "total": len(series),
                     "pct": round(failed / len(series) * 100, 2),
                 })
-                for idx in series[~mask].head(5).index:
+                for idx in series[~mask].index:
                     sample_failures.append({
                         "column": col,
                         "row": int(idx),

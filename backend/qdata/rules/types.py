@@ -64,7 +64,7 @@ class TypeCheck(Rule):
         )
 
     def _infer_actual_type(self, series: pd.Series) -> str:
-        sample = series.head(100)
+        sample = series
         try:
             pd.to_numeric(sample)
             return "numeric"

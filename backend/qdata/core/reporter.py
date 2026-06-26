@@ -109,7 +109,7 @@ th{font-weight:600;color:#fff;background:rgba(255,255,255,0.05)}
           <th>{{ key }}</th>
           {% endfor %}
         </tr>
-        {% for d in dets[:20] %}
+        {% for d in dets %}
         <tr>
           {% for val in d.values() %}
           <td>{{ val }}</td>
@@ -674,7 +674,7 @@ def generate_pdf(
                     pdf.cell(cw, 6, f" {h}", border=1, fill=True)
                 pdf.set_xy(x0, pdf.get_y() + 6)
 
-                for e in dets["errors"][:25]:
+                for e in dets["errors"]:
                     if pdf.get_y() > 270:
                         pdf.add_page()
                         pdf.set_font("Helvetica", "B", 7)
@@ -701,11 +701,6 @@ def generate_pdf(
                         pdf.set_xy(x, pdf.get_y())
                         pdf.cell(cw, 5, f" {v}", border=1)
                     pdf.set_xy(x0, pdf.get_y() + 5)
-
-                if len(dets["errors"]) > 25:
-                    pdf.set_font("Helvetica", "I", 7)
-                    pdf.set_text_color(150, 150, 150)
-                    pdf.cell(inner_w, 5, f"  ... y {len(dets['errors']) - 25} errores más", ln=True)
 
             pdf.ln(4)
 

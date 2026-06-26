@@ -1,14 +1,51 @@
 export type ErrorInfo = {
   descripcion: string
   sugerencia: string
-  fila: number | null
+  fila: number | string | null
   columna: string | null
   valor: string | null
 }
 
 function valStr(v: any): string {
   if (v === null || v === undefined) return '—'
-  return String(v)
+  const s = String(v)
+  const SPECIAL_CHARS: Record<string, string> = {
+    '\u00A0': '\\u00A0(NBSP)',
+    '\u200B': '\\u200B(ZWSP)',
+    '\u200C': '\\u200C(ZWNJ)',
+    '\u200D': '\\u200D(ZWJ)',
+    '\uFEFF': '\\uFEFF(BOM)',
+    '\u202A': '\\u202A(LRE)',
+    '\u202B': '\\u202B(RLE)',
+    '\u202C': '\\u202C(PDF)',
+    '\u202D': '\\u202D(LRO)',
+    '\u202E': '\\u202E(RLO)',
+    '\u2066': '\\u2066(LRI)',
+    '\u2067': '\\u2067(RLI)',
+    '\u2068': '\\u2068(FSI)',
+    '\u2069': '\\u2069(PDI)',
+    '\u0000': '\\0', '\u0001': '\\u0001', '\u0002': '\\u0002', '\u0003': '\\u0003',
+    '\u0004': '\\u0004', '\u0005': '\\u0005', '\u0006': '\\u0006', '\u0007': '\\u0007',
+    '\u0008': '\\u0008', '\u000B': '\\u000B', '\u000C': '\\u000C', '\u000E': '\\u000E',
+    '\u000F': '\\u000F', '\u0010': '\\u0010', '\u0011': '\\u0011', '\u0012': '\\u0012',
+    '\u0013': '\\u0013', '\u0014': '\\u0014', '\u0015': '\\u0015', '\u0016': '\\u0016',
+    '\u0017': '\\u0017', '\u0018': '\\u0018', '\u0019': '\\u0019', '\u001A': '\\u001A',
+    '\u001B': '\\u001B', '\u001C': '\\u001C', '\u001D': '\\u001D', '\u001E': '\\u001E',
+    '\u001F': '\\u001F', '\u007F': '\\u007F',
+    '\u2000': '\\u2000', '\u2001': '\\u2001', '\u2002': '\\u2002', '\u2003': '\\u2003',
+    '\u2004': '\\u2004', '\u2005': '\\u2005', '\u2006': '\\u2006', '\u2007': '\\u2007',
+    '\u2008': '\\u2008', '\u2009': '\\u2009', '\u200A': '\\u200A', '\u202F': '\\u202F',
+    '\u205F': '\\u205F', '\u3000': '\\u3000',
+  }
+  let result = ''
+  for (const ch of s) {
+    if (SPECIAL_CHARS[ch]) {
+      result += SPECIAL_CHARS[ch]
+    } else {
+      result += ch
+    }
+  }
+  return result
 }
 
 function trunc(s: string, n = 120): string {
@@ -26,7 +63,7 @@ const SUGERENCIAS: Record<string, string> = {
   correlation_check: 'Considerar eliminar variables correlacionadas o usar PCA',
   distribution_check: 'Aplicar transformación logarítmica o Box-Cox',
   email_check: 'Corregir formato de email: usuario@dominio.tld',
-  special_chars_check: 'Limpiar caracteres de control y zero-width Unicode',
+  special_chars_check: 'Remover caracteres problemáticos: control, zero-width, uso privado, seguridad y espacios no estándar',
   string_length_check: 'Ajustar longitud al rango esperado',
   trim_check: 'Aplicar .trim() para eliminar espacios extras',
   case_consistency_check: 'Uniformar a mayúsculas o minúsculas según el estándar',
@@ -55,6 +92,7 @@ const SUGERENCIAS: Record<string, string> = {
   fuzzy_id_match: 'Revisar IDs similares que podrían ser errores de digitación',
   similar_dob: 'Revisar fechas cercanas del mismo registro duplicado',
   person_composite_similarity: 'Revisar grupos detectados como posible misma persona',
+  personas_similares: 'Revisar grupos de personas similares detectados — pueden ser duplicados',
   custom_sql_rule: 'Revisar registros que no cumplen la regla SQL personalizada',
   custom_python_rule: 'Revisar registros que no pasan la validación personalizada',
 }
@@ -91,16 +129,22 @@ export function describeError(ruleName: string, item: Record<string, any>, recom
         valor: item.value != null ? valStr(item.value) : null,
       }
 
-    case 'duplicate_check':
+    case 'duplicate_check': {
+      const rows = item.rows || []
+      const count = rows.length
+      const rowNums = rows.map((r: any) => r.row != null ? Number(r.row) + 2 : null).filter((r: any) => r !== null)
+      const displayRows = rowNums.length <= 5
+        ? rowNums.join(', ')
+        : `${rowNums[0]}, ${rowNums[1]}, … (+${rowNums.length - 2} más)`
+      const first = rows[0]
       return {
-        descripcion: item.values
-          ? `Fila duplicada: ${Object.entries(item.values).slice(0, 4).map(([k, v]) => `${k}=${v}`).join(', ')}`
-          : 'Fila duplicada',
+        descripcion: `Grupo duplicado (${count} filas): ${first?.values ? Object.entries(first.values).slice(0, 3).map(([k, v]) => `${k}=${v}`).join(', ') : ''}`,
         sugerencia: sug,
-        fila: row,
+        fila: displayRows || null,
         columna: null,
-        valor: item.values ? Object.entries(item.values).slice(0, 6).map(([k, v]) => `${k}: ${v}`).join(', ') : null,
+        valor: first?.values ? Object.entries(first.values).slice(0, 5).map(([k, v]) => `${k}: ${v}`).join(', ') : null,
       }
+    }
 
     case 'range_check':
       return {
@@ -265,6 +309,7 @@ export function describeError(ruleName: string, item: Record<string, any>, recom
       }
 
     case 'person_composite_similarity':
+    case 'personas_similares':
       return {
         descripcion: item.group_info
           ? `Posible misma persona (score compuesto: ${(item.group_info.composite_score * 100).toFixed(0)}%, grupo de ${item.group_info.group_size})`
@@ -382,6 +427,8 @@ export function describeDetail(ruleName: string, item: Record<string, any>): str
       return `${item.total_groups || item.groups?.length || 0} grupos de registros similares`
     case 'person_composite_similarity':
       return `${item.total_groups} grupos, campos: ${(item.available_fields || []).join(', ')}, pesos: ${item.weights ? Object.entries(item.weights).map(([k, v]) => `${k}=${v}`).join(', ') : 'N/A'}`
+    case 'personas_similares':
+      return `${item.total_groups} grupos detectados (modo: ${item.mode || 'rápido'})`
     default:
       if (item.error) return `Error: ${item.error}`
       if (item.note) return item.note

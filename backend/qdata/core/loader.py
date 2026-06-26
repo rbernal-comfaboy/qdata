@@ -7,6 +7,7 @@ import pandas as pd
 
 
 _FILE_TYPES = {"csv", "excel", "json", "parquet"}
+_CHUNK_SIZE = 10_000
 
 
 def _apply_limit(sql: str, limit: int) -> str:
@@ -31,7 +32,7 @@ def _check_cube(source_type: str, connection_string: str, query: str, file_path:
             if nrows is not None and len(df) > nrows:
                 df = df.head(nrows)
             return df
-    except ImportError:
+    except Exception:
         pass
     return None
 
@@ -43,49 +44,54 @@ def _store_cube(source_type: str, connection_string: str, query: str, file_path:
         cube_mgr = DataCubeManager.get_instance()
         cache_key = DataCubeManager.make_key(source_type, connection_string or "", query or "", file_path or "")
         cube_mgr.put(cache_key, df)
-    except ImportError:
+    except Exception:
         pass
 
 
 def load_data(source_type: str, connection_string: str, query: str, file_path: str, **kwargs) -> pd.DataFrame:
     nrows = kwargs.pop("nrows", None)
     storage_mode = kwargs.pop("storage_mode", "memory")
+    progress_callback = kwargs.pop("progress_callback", None)
 
     # Skip cube for connection mode — always query live
     if storage_mode == "memory":
         cached = _check_cube(source_type, connection_string, query, file_path, nrows)
         if cached is not None:
+            if progress_callback:
+                progress_callback(len(cached), len(cached), "Datos cargados desde caché")
             return cached
 
     if source_type in _FILE_TYPES:
         kw = {}
         if nrows:
             kw["nrows"] = nrows
-        df = _load_file(source_type, file_path, **kw)
+        df = _load_file(source_type, file_path, progress_callback=progress_callback, **kw)
     else:
         q = _apply_limit(query, nrows) if nrows else query
 
         if source_type == "postgresql":
             from qdata.connectors.postgres import PostgresConnector
             c = PostgresConnector(connection_string)
-            df = c.load(q)
+            df = c.load(q, progress_callback=progress_callback)
         elif source_type == "mysql":
             from qdata.connectors.mysql import MySQLConnector
             c = MySQLConnector(connection_string)
-            df = c.load(q)
+            df = c.load(q, progress_callback=progress_callback)
         elif source_type == "sqlserver":
             from qdata.connectors.sqlserver import SQLServerConnector
             c = SQLServerConnector(connection_string)
-            df = c.load(q)
+            df = c.load(q, progress_callback=progress_callback)
         elif source_type == "sqlite":
             from qdata.connectors.sqlite import SQLiteConnector
             c = SQLiteConnector(file_path)
-            df = c.load(q)
+            df = c.load(q, progress_callback=progress_callback)
         else:
             raise ValueError(f"Unsupported source type: {source_type}")
 
     # Only cache full data loads (no row limit) in memory mode — partial previews skip the cube
     if nrows is None and not df.empty and storage_mode == "memory":
+        if progress_callback:
+            progress_callback(len(df), len(df), "Guardando en caché...")
         _store_cube(source_type, connection_string, query, file_path, df)
 
     # Apply nrows limit to returned data if needed
@@ -96,18 +102,22 @@ def load_data(source_type: str, connection_string: str, query: str, file_path: s
 
 
 def _load_file(source_type: str, file_path: str, **kwargs) -> pd.DataFrame:
+    progress_callback = kwargs.pop("progress_callback", None)
     if source_type == "csv":
         from qdata.connectors.csv_conn import CSVConnector
         c = CSVConnector(file_path)
+        return c.load(progress_callback=progress_callback, **kwargs)
     elif source_type == "excel":
         from qdata.connectors.excel_conn import ExcelConnector
         c = ExcelConnector(file_path)
+        return c.load(**kwargs)
     elif source_type == "json":
         from qdata.connectors.json_conn import JSONConnector
         c = JSONConnector(file_path)
+        return c.load(**kwargs)
     elif source_type == "parquet":
         from qdata.connectors.parquet_conn import ParquetConnector
         c = ParquetConnector(file_path)
+        return c.load(**kwargs)
     else:
         raise ValueError(f"Unsupported file type: {source_type}")
-    return c.load(**kwargs)

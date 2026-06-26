@@ -21,7 +21,7 @@ def calculate_score(results: list[RuleResult]) -> tuple[int, str]:
         return 100, "excelente"
 
     raw_score = max(0, 100 - (total_penalty / total_weight * 100))
-    score = round(raw_score)
+    score = round(raw_score, 2)
 
     if score >= 90:
         label = "excelente"
