@@ -63,7 +63,10 @@ def build_connection_string(source_type: str, fields: dict) -> str:
         port = port or DEFAULT_PORTS["sqlserver"]
         pw = _url_encode(password)
         driver = _detect_sqlserver_driver()
-        return f"mssql+pyodbc://{username}:{pw}@{host}:{port}/{database}?driver={driver}"
+        cs = f"mssql+pyodbc://{username}:{pw}@{host}:{port}/{database}?driver={driver}"
+        if not ssl:
+            cs += "&TrustServerCertificate=yes"
+        return cs
     elif source_type == "sqlite":
         return f"sqlite:///{database}"
     return ""
