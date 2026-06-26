@@ -22,6 +22,24 @@ DEFAULT_PORTS = {
 }
 
 
+def _detect_sqlserver_driver() -> str:
+    """Return the best available ODBC driver name for SQL Server."""
+    candidates = [
+        "ODBC Driver 18 for SQL Server",
+        "ODBC Driver 17 for SQL Server",
+        "SQL Server",
+    ]
+    try:
+        import pyodbc
+        available = {d.lower() for d in pyodbc.drivers()}
+        for c in candidates:
+            if c.lower() in available:
+                return c.replace(" ", "+")
+    except ImportError:
+        pass
+    return "SQL+Server"
+
+
 def build_connection_string(source_type: str, fields: dict) -> str:
     host = fields.get("host", "")
     port = fields.get("port")
@@ -44,7 +62,7 @@ def build_connection_string(source_type: str, fields: dict) -> str:
     elif source_type == "sqlserver":
         port = port or DEFAULT_PORTS["sqlserver"]
         pw = _url_encode(password)
-        driver = "ODBC+Driver+17+for+SQL+Server"
+        driver = _detect_sqlserver_driver()
         return f"mssql+pyodbc://{username}:{pw}@{host}:{port}/{database}?driver={driver}"
     elif source_type == "sqlite":
         return f"sqlite:///{database}"
