@@ -144,7 +144,7 @@ export default function Analyze() {
 
   const sourceLabels: Record<string, string> = {
     postgresql: 'PostgreSQL', mysql: 'MySQL', sqlserver: 'SQL Server',
-    oracle: 'Oracle', sqlite: 'SQLite',
+    oracle: 'Oracle', informix: 'Informix', sqlite: 'SQLite',
     csv: 'CSV', excel: 'Excel', json: 'JSON', parquet: 'Parquet',
   }
 

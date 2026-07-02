@@ -87,7 +87,7 @@ export default function DataSources() {
 
   const sourceLabels: Record<string, string> = {
     postgresql: 'PostgreSQL', mysql: 'MySQL', sqlserver: 'SQL Server',
-    oracle: 'Oracle', sqlite: 'SQLite',
+    oracle: 'Oracle', informix: 'Informix', sqlite: 'SQLite',
     csv: 'CSV', excel: 'Excel', json: 'JSON', parquet: 'Parquet',
   }
 
@@ -143,6 +143,7 @@ export default function DataSources() {
                   <option value="mysql">MySQL</option>
                   <option value="sqlserver">SQL Server</option>
                   <option value="oracle">Oracle</option>
+                  <option value="informix">Informix</option>
                   <option value="sqlite">SQLite</option>
                 </select>
               </div>

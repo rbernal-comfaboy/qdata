@@ -25,7 +25,7 @@ interface DSForm {
 }
 
 const defaultPorts: Record<string, number> = {
-  postgresql: 5432, mysql: 3306, sqlserver: 1433, oracle: 1521,
+  postgresql: 5432, mysql: 3306, sqlserver: 1433, oracle: 1521, informix: 9088,
 }
 
 const defaultDBFields: DBFields = { host: '', port: null, database: '', username: '', password: '', ssl: false, instance: '' }
@@ -39,11 +39,11 @@ const extMap: Record<string, string> = {
 
 const sourceLabels: Record<string, string> = {
   postgresql: 'PostgreSQL', mysql: 'MySQL', sqlserver: 'SQL Server',
-  oracle: 'Oracle', sqlite: 'SQLite',
+  oracle: 'Oracle', informix: 'Informix', sqlite: 'SQLite',
   csv: 'CSV', excel: 'Excel', json: 'JSON', parquet: 'Parquet',
 }
 
-const dbTypes = ['postgresql', 'mysql', 'sqlserver', 'oracle', 'sqlite']
+const dbTypes = ['postgresql', 'mysql', 'sqlserver', 'oracle', 'informix', 'sqlite']
 const fileTypes = ['csv', 'excel', 'json', 'parquet']
 
 function isDBType(t: string) { return dbTypes.includes(t) }

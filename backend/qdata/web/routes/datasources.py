@@ -27,6 +27,7 @@ DEFAULT_PORTS = {
     "mysql": 3306,
     "sqlserver": 1433,
     "oracle": 1521,
+    "informix": 9088,
 }
 
 
@@ -83,6 +84,9 @@ def build_connection_string(source_type: str, fields: dict) -> str:
         port = port or DEFAULT_PORTS["oracle"]
         pw = _url_encode(password)
         return f"oracle+oracledb://{username}:{pw}@{host}:{port}/{database}"
+    elif source_type == "informix":
+        port = port or DEFAULT_PORTS["informix"]
+        return f"informix+pyodbc://{username}:{password}@{host}:{port}/{database}"
     elif source_type == "sqlite":
         return f"sqlite:///{database}"
     return ""
@@ -309,13 +313,24 @@ async def test_connection(req: TestConnectionRequest):
         if not conn_str:
             return TestConnectionResponse(success=False, error=f"Tipo de fuente no soportado: {req.source_type}")
 
-        engine = create_engine(conn_str)
-        with engine.connect() as conn:
-            test_sql = "SELECT 1 FROM DUAL" if req.source_type == "oracle" else "SELECT 1"
-            conn.execute(text(test_sql))
-
-        inspector = inspect(engine)
-        tables = inspector.get_table_names()
+        tables = []
+        if req.source_type == "informix":
+            from qdata.connectors.informix import InformixConnector, _get_table_names
+            import pyodbc
+            conn = pyodbc.connect(conn_str, autocommit=True)
+            try:
+                conn.execute(text("SELECT 1 FROM systables WHERE tabid = 1"))
+                cursor = conn.cursor()
+                tables = _get_table_names(cursor)
+            finally:
+                conn.close()
+        else:
+            engine = create_engine(conn_str)
+            with engine.connect() as conn:
+                test_sql = "SELECT 1 FROM DUAL" if req.source_type == "oracle" else "SELECT 1"
+                conn.execute(text(test_sql))
+            inspector = inspect(engine)
+            tables = inspector.get_table_names()
         return TestConnectionResponse(success=True, tables=tables)
     except Exception as e:
         return TestConnectionResponse(success=False, error=str(e)[:300])
@@ -323,6 +338,8 @@ async def test_connection(req: TestConnectionRequest):
 
 def _get_engine(ds: DataSource):
     if ds.source_type in ("csv", "excel", "json", "parquet", "txt"):
+        return None
+    if ds.source_type == "informix":
         return None
     if ds.source_type == "sqlite":
         cs = ds.connection_string or f"sqlite:///{ds.file_path}"
@@ -344,6 +361,27 @@ async def list_tables(
     if not ds:
         raise HTTPException(status_code=404, detail="Data source not found")
     engine = _get_engine(ds)
+    if ds.source_type == "informix":
+        import pyodbc
+        from qdata.connectors.informix import InformixConnector, _get_table_names
+        conn = pyodbc.connect(ds.connection_string or "", autocommit=True)
+        try:
+            cursor = conn.cursor()
+            tables = _get_table_names(cursor)
+            cols = []
+            for t in tables:
+                cursor.execute(
+                    "SELECT c.colname, c.coltype, c.nulls "
+                    "FROM syscolumns c JOIN systables t ON c.tabid = t.tabid "
+                    "WHERE t.tabname = ? AND t.tabid >= 100",
+                    t,
+                )
+                for row in cursor.fetchall():
+                    cols.append({"table": t, "column": row[0], "type": str(row[1]), "nullable": row[2] == 1})
+            table_list = [{"name": t, "row_count": None} for t in tables]
+            return {"tables": table_list, "columns": cols}
+        finally:
+            conn.close()
     if not engine:
         return {"tables": [], "columns": []}
     try:

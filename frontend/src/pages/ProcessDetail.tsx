@@ -642,6 +642,8 @@ export default function ProcessDetail() {
                     <option value="postgresql">PostgreSQL</option>
                     <option value="mysql">MySQL</option>
                     <option value="sqlserver">SQL Server</option>
+                    <option value="oracle">Oracle</option>
+                    <option value="informix">Informix</option>
                     <option value="sqlite">SQLite</option>
                     <option value="csv">CSV</option>
                     <option value="excel">Excel</option>

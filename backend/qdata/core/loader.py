@@ -86,6 +86,10 @@ def load_data(source_type: str, connection_string: str, query: str, file_path: s
                 from qdata.connectors.oracle import OracleConnector
                 c = OracleConnector(connection_string)
                 return c.load(q, progress_callback=progress_callback)
+            elif source_type == "informix":
+                from qdata.connectors.informix import InformixConnector
+                c = InformixConnector(connection_string)
+                return c.load(q, progress_callback=progress_callback)
             elif source_type == "sqlite":
                 from qdata.connectors.sqlite import SQLiteConnector
                 c = SQLiteConnector(file_path)
