@@ -49,6 +49,24 @@ def _detect_sqlserver_driver() -> str:
     return "SQL+Server"
 
 
+def _detect_informix_driver() -> str:
+    candidates = [
+        "IBM INFORMIX ODBC DRIVER (64-bit)",
+        "IBM INFORMIX ODBC DRIVER",
+        "Informix",
+        "INFORMIX",
+    ]
+    try:
+        import pyodbc
+        available = {d.lower() for d in pyodbc.drivers()}
+        for c in candidates:
+            if c.lower() in available:
+                return c
+    except ImportError:
+        pass
+    return "Informix"
+
+
 def build_connection_string(source_type: str, fields: dict) -> str:
     host = fields.get("host", "")
     port = fields.get("port")
@@ -86,7 +104,14 @@ def build_connection_string(source_type: str, fields: dict) -> str:
         return f"oracle+oracledb://{username}:{pw}@{host}:{port}/{database}"
     elif source_type == "informix":
         port = port or DEFAULT_PORTS["informix"]
-        return f"informix+pyodbc://{username}:{password}@{host}:{port}/{database}"
+        driver = _detect_informix_driver()
+        server = fields.get("instance", "") or host
+        return (
+            f"DRIVER={{{driver}}};"
+            f"HOST={host};SERVICE={port};SERVER={server};"
+            f"DATABASE={database};UID={username};PWD={password};"
+            f"PROTOCOL=onsoctcp"
+        )
     elif source_type == "sqlite":
         return f"sqlite:///{database}"
     return ""
@@ -315,11 +340,11 @@ async def test_connection(req: TestConnectionRequest):
 
         tables = []
         if req.source_type == "informix":
-            from qdata.connectors.informix import InformixConnector, _get_table_names
+            from qdata.connectors.informix import _get_table_names
             import pyodbc
             conn = pyodbc.connect(conn_str, autocommit=True)
             try:
-                conn.execute(text("SELECT 1 FROM systables WHERE tabid = 1"))
+                conn.execute("SELECT 1 FROM systables WHERE tabid = 1")
                 cursor = conn.cursor()
                 tables = _get_table_names(cursor)
             finally:
