@@ -14,7 +14,8 @@ interface SourcePreview { columns: string[]; rows: any[][]; total_rows: number }
 
 const sourceLabels: Record<string, string> = {
   postgresql: 'PostgreSQL', mysql: 'MySQL', sqlserver: 'SQL Server',
-  sqlite: 'SQLite', csv: 'CSV', excel: 'Excel', json: 'JSON', parquet: 'Parquet',
+  oracle: 'Oracle', sqlite: 'SQLite',
+  csv: 'CSV', excel: 'Excel', json: 'JSON', parquet: 'Parquet',
 }
 
 const isFileType = (st: string) => ['csv', 'excel', 'json', 'parquet'].includes(st)
@@ -46,7 +47,7 @@ export default function SourceForm() {
   const [saveProgress, setSaveProgress] = useState<{ active: boolean; step: number; total: number; message: string } | null>(null)
 
   // Visual mode
-  const [tables, setTables] = useState<string[]>([])
+  const [tables, setTables] = useState<{ name: string; row_count: number | null }[]>([])
   const [tablesLoading, setTablesLoading] = useState(false)
   const [tableSearch, setTableSearch] = useState('')
   const [selectedTable, setSelectedTable] = useState('')
@@ -63,7 +64,7 @@ export default function SourceForm() {
   const [formPreviewLoading, setFormPreviewLoading] = useState(false)
   const [columnSamples, setColumnSamples] = useState<Record<string, any>>({})
 
-  const filteredTables = tables.filter(t => t.toLowerCase().includes(tableSearch.toLowerCase()))
+  const filteredTables = tables.filter(t => t.name.toLowerCase().includes(tableSearch.toLowerCase()))
 
   const { data: sourceData } = useQuery({
     queryKey: ['source', id],
@@ -110,7 +111,8 @@ export default function SourceForm() {
     setTablesLoading(true)
     setShowSuggest(false)
     api.get(`/datasources/${dsId}/tables`).then(r => {
-      setTables(r.data.tables || [])
+      const raw = r.data.tables || []
+      setTables(Array.isArray(raw) ? (typeof raw[0] === 'string' ? raw.map((n: string) => ({ name: n, row_count: null })) : raw) : [])
     }).catch(() => {}).finally(() => setTablesLoading(false))
   }, [dsId])
 
@@ -538,10 +540,15 @@ export default function SourceForm() {
                     ) : filteredTables.length > 0 ? (
                       <div className="max-h-32 overflow-y-auto space-y-0.5 border border-white/10 rounded-xl p-1.5">
                         {filteredTables.map(t => (
-                          <button key={t} onClick={() => loadTableColumns(t)}
+                          <button key={t.name} onClick={() => loadTableColumns(t.name)}
                             className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-all ${
-                              selectedTable === t ? 'bg-indigo-500/20 text-indigo-300' : 'text-muted hover:bg-white/5'
-                            }`}>{t}</button>
+                              selectedTable === t.name ? 'bg-indigo-500/20 text-indigo-300' : 'text-muted hover:bg-white/5'
+                            }`}>
+                            <span>{t.name}</span>
+                            {t.row_count !== null && t.row_count !== undefined && (
+                              <span className="ml-2 text-[10px] text-muted">{t.row_count.toLocaleString()} registros</span>
+                            )}
+                          </button>
                         ))}
                       </div>
                     ) : <p className="text-xs text-muted">No hay tablas disponibles</p>}

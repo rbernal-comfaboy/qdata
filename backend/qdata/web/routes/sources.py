@@ -70,6 +70,22 @@ async def list_sources(
     for s in sources:
         ds = await session.get(DataSource, s.data_source_id)
         pd = s.preview_data or {}
+        total_rows = pd.get("total_rows") if isinstance(pd, dict) else None
+        if total_rows is None and ds:
+            is_file = ds.source_type in ("csv", "excel", "json", "parquet", "txt")
+            q = s.query or ""
+            try:
+                if q.strip() and not is_file:
+                    import re
+                    count_sql = re.sub(r"SELECT\s+.+?\s+FROM", "SELECT COUNT(*) FROM", q, count=1, flags=re.I)
+                    if count_sql != q:
+                        df = load_data(ds.source_type, ds.connection_string or "", count_sql, "")
+                        total_rows = df.iloc[0, 0] if not df.empty else None
+                if total_rows is None and is_file:
+                    df = load_data(ds.source_type, ds.connection_string or "", "", ds.file_path or "")
+                    total_rows = len(df)
+            except Exception:
+                pass
         out.append({
             "id": str(s.id),
             "name": s.name,
@@ -82,7 +98,7 @@ async def list_sources(
             "storage_mode": s.storage_mode or "connection",
             "refresh_cron": s.refresh_cron,
             "refresh_enabled": s.refresh_enabled,
-            "total_rows": pd.get("total_rows") if isinstance(pd, dict) else None,
+            "total_rows": total_rows,
             "columns_count": len(s.selected_columns) if s.selected_columns else None,
             "preview_data": pd,
             "created_at": s.created_at.isoformat() if s.created_at else None,

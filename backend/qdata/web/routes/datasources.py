@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 from typing import Any
 
@@ -13,12 +14,19 @@ from qdata.core.loader import load_data
 from qdata.db.models import DataSource, Source, User
 from qdata.db.session import get_session
 
+# Initialize Oracle thick mode if Instant Client is available
+_instantclient_path = "/opt/oracle/instantclient"
+if os.path.isdir(_instantclient_path):
+    import oracledb
+    oracledb.init_oracle_client(lib_dir=_instantclient_path)
+
 router = APIRouter()
 
 DEFAULT_PORTS = {
     "postgresql": 5432,
     "mysql": 3306,
     "sqlserver": 1433,
+    "oracle": 1521,
 }
 
 
@@ -71,6 +79,10 @@ def build_connection_string(source_type: str, fields: dict) -> str:
         if not ssl:
             cs += "&TrustServerCertificate=yes"
         return cs
+    elif source_type == "oracle":
+        port = port or DEFAULT_PORTS["oracle"]
+        pw = _url_encode(password)
+        return f"oracle+oracledb://{username}:{pw}@{host}:{port}/{database}"
     elif source_type == "sqlite":
         return f"sqlite:///{database}"
     return ""
@@ -148,6 +160,7 @@ def _serialize(ds: DataSource) -> dict:
 
 
 @router.get("/")
+@router.get("")
 async def list_datasources(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
@@ -175,6 +188,7 @@ async def get_datasource(
 
 
 @router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_datasource(
     req: DataSourceCreate,
     user: User = Depends(get_current_user),
@@ -297,7 +311,8 @@ async def test_connection(req: TestConnectionRequest):
 
         engine = create_engine(conn_str)
         with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+            test_sql = "SELECT 1 FROM DUAL" if req.source_type == "oracle" else "SELECT 1"
+            conn.execute(text(test_sql))
 
         inspector = inspect(engine)
         tables = inspector.get_table_names()
@@ -334,13 +349,60 @@ async def list_tables(
     try:
         inspector = inspect(engine)
         tables = inspector.get_table_names()
+        row_counts = _get_row_counts(engine, ds.source_type, tables)
         cols = []
         for t in tables:
             for c in inspector.get_columns(t):
                 cols.append({"table": t, "column": c["name"], "type": str(c["type"]), "nullable": c.get("nullable", True)})
-        return {"tables": tables, "columns": cols}
+        table_list = [{"name": t, "row_count": row_counts.get(t)} for t in tables]
+        return {"tables": table_list, "columns": cols}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _get_row_counts(engine, source_type: str, tables: list[str]) -> dict[str, int | None]:
+    if not tables:
+        return {}
+    try:
+        with engine.connect() as conn:
+            if source_type == "postgresql":
+                result = conn.execute(text(
+                    "SELECT relname, reltuples::bigint FROM pg_class WHERE relname IN :tbls"
+                ), {"tbls": tuple(tables)})
+                return {r[0]: r[1] for r in result}
+            elif source_type == "mysql":
+                result = conn.execute(text(
+                    "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.tables "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN :tbls"
+                ), {"tbls": tuple(tables)})
+                return {r[0]: r[1] for r in result}
+            elif source_type == "sqlserver":
+                placeholders = ", ".join(f"'{t}'" for t in tables)
+                result = conn.execute(text(
+                    f"SELECT OBJECT_NAME(object_id), SUM(rows) FROM sys.partitions "
+                    f"WHERE object_id IN (SELECT object_id FROM sys.objects WHERE name IN ({placeholders}) AND type='U') "
+                    f"AND index_id IN (0,1) GROUP BY object_id"
+                ))
+                return {r[0]: r[1] for r in result}
+            elif source_type == "oracle":
+                placeholders = ", ".join(f"'{t.upper()}'" for t in tables)
+                try:
+                    result = conn.execute(text(
+                        f"SELECT TABLE_NAME, NUM_ROWS FROM ALL_TABLES WHERE TABLE_NAME IN ({placeholders})"
+                    ))
+                    counts = {r[0]: r[1] for r in result}
+                    for t in tables:
+                        if t.upper() not in counts:
+                            r = conn.execute(text(f"SELECT COUNT(*) FROM {t}"))
+                            counts[t.upper()] = r.scalar()
+                    return counts
+                except Exception:
+                    return {t: conn.execute(text(f"SELECT COUNT(*) FROM {t}")).scalar() for t in tables}
+            elif source_type == "sqlite":
+                return {t: conn.execute(text(f'SELECT COUNT(*) FROM "{t}"')).scalar() for t in tables}
+    except Exception:
+        pass
+    return {}
 
 
 @router.get("/{ds_id}/tables/{table_name}/columns")

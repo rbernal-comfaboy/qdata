@@ -9,7 +9,8 @@ import GlassContainer from '../components/layout/GlassContainer'
 
 const sourceLabels: Record<string, string> = {
   postgresql: 'PostgreSQL', mysql: 'MySQL', sqlserver: 'SQL Server',
-  sqlite: 'SQLite', csv: 'CSV', excel: 'Excel', json: 'JSON', parquet: 'Parquet',
+  oracle: 'Oracle', sqlite: 'SQLite',
+  csv: 'CSV', excel: 'Excel', json: 'JSON', parquet: 'Parquet',
 }
 
 export default function SourcesPage() {

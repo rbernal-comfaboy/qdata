@@ -87,7 +87,8 @@ export default function DataSources() {
 
   const sourceLabels: Record<string, string> = {
     postgresql: 'PostgreSQL', mysql: 'MySQL', sqlserver: 'SQL Server',
-    sqlite: 'SQLite', csv: 'CSV', excel: 'Excel', json: 'JSON', parquet: 'Parquet',
+    oracle: 'Oracle', sqlite: 'SQLite',
+    csv: 'CSV', excel: 'Excel', json: 'JSON', parquet: 'Parquet',
   }
 
   return (
@@ -136,11 +137,12 @@ export default function DataSources() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm text-muted mb-1">Tipo de BD</label>
-                <select value={form.source_type} onChange={(e) => setForm({ ...form, source_type: e.target.value })}
+                  <select value={form.source_type} onChange={(e) => setForm({ ...form, source_type: e.target.value })}
                   className="glass-input">
                   <option value="postgresql">PostgreSQL</option>
                   <option value="mysql">MySQL</option>
                   <option value="sqlserver">SQL Server</option>
+                  <option value="oracle">Oracle</option>
                   <option value="sqlite">SQLite</option>
                 </select>
               </div>

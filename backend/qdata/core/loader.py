@@ -69,24 +69,37 @@ def load_data(source_type: str, connection_string: str, query: str, file_path: s
     else:
         q = _apply_limit(query, nrows) if nrows else query
 
-        if source_type == "postgresql":
-            from qdata.connectors.postgres import PostgresConnector
-            c = PostgresConnector(connection_string)
-            df = c.load(q, progress_callback=progress_callback)
-        elif source_type == "mysql":
-            from qdata.connectors.mysql import MySQLConnector
-            c = MySQLConnector(connection_string)
-            df = c.load(q, progress_callback=progress_callback)
-        elif source_type == "sqlserver":
-            from qdata.connectors.sqlserver import SQLServerConnector
-            c = SQLServerConnector(connection_string)
-            df = c.load(q, progress_callback=progress_callback)
-        elif source_type == "sqlite":
-            from qdata.connectors.sqlite import SQLiteConnector
-            c = SQLiteConnector(file_path)
-            df = c.load(q, progress_callback=progress_callback)
-        else:
-            raise ValueError(f"Unsupported source type: {source_type}")
+        def _load_with(q: str) -> pd.DataFrame:
+            if source_type == "postgresql":
+                from qdata.connectors.postgres import PostgresConnector
+                c = PostgresConnector(connection_string)
+                return c.load(q, progress_callback=progress_callback)
+            elif source_type == "mysql":
+                from qdata.connectors.mysql import MySQLConnector
+                c = MySQLConnector(connection_string)
+                return c.load(q, progress_callback=progress_callback)
+            elif source_type == "sqlserver":
+                from qdata.connectors.sqlserver import SQLServerConnector
+                c = SQLServerConnector(connection_string)
+                return c.load(q, progress_callback=progress_callback)
+            elif source_type == "oracle":
+                from qdata.connectors.oracle import OracleConnector
+                c = OracleConnector(connection_string)
+                return c.load(q, progress_callback=progress_callback)
+            elif source_type == "sqlite":
+                from qdata.connectors.sqlite import SQLiteConnector
+                c = SQLiteConnector(file_path)
+                return c.load(q, progress_callback=progress_callback)
+            else:
+                raise ValueError(f"Unsupported source type: {source_type}")
+
+        try:
+            df = _load_with(q)
+        except Exception:
+            if nrows and q != query:
+                df = _load_with(query)
+            else:
+                raise
 
     # Only cache full data loads (no row limit) in memory mode — partial previews skip the cube
     if nrows is None and not df.empty and storage_mode == "memory":

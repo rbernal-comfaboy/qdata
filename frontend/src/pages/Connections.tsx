@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Database, Plus, Edit3, Trash2, Save, X, AlertCircle, Upload, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronUp,
+  Database, Plus, Edit3, Trash2, Copy, Save, X, AlertCircle, Upload, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronUp,
 } from 'lucide-react'
 import { useDropzone } from 'react-dropzone'
 import api from '../api/client'
@@ -14,6 +14,7 @@ interface DBFields {
   username: string
   password: string
   ssl: boolean
+  instance: string
 }
 
 interface DSForm {
@@ -24,10 +25,10 @@ interface DSForm {
 }
 
 const defaultPorts: Record<string, number> = {
-  postgresql: 5432, mysql: 3306, sqlserver: 1433,
+  postgresql: 5432, mysql: 3306, sqlserver: 1433, oracle: 1521,
 }
 
-const defaultDBFields: DBFields = { host: '', port: null, database: '', username: '', password: '', ssl: false }
+const defaultDBFields: DBFields = { host: '', port: null, database: '', username: '', password: '', ssl: false, instance: '' }
 
 const emptyForm: DSForm = { name: '', source_type: 'postgresql', db_fields: { ...defaultDBFields }, file_path: '' }
 
@@ -38,10 +39,11 @@ const extMap: Record<string, string> = {
 
 const sourceLabels: Record<string, string> = {
   postgresql: 'PostgreSQL', mysql: 'MySQL', sqlserver: 'SQL Server',
-  sqlite: 'SQLite', csv: 'CSV', excel: 'Excel', json: 'JSON', parquet: 'Parquet',
+  oracle: 'Oracle', sqlite: 'SQLite',
+  csv: 'CSV', excel: 'Excel', json: 'JSON', parquet: 'Parquet',
 }
 
-const dbTypes = ['postgresql', 'mysql', 'sqlserver', 'sqlite']
+const dbTypes = ['postgresql', 'mysql', 'sqlserver', 'oracle', 'sqlite']
 const fileTypes = ['csv', 'excel', 'json', 'parquet']
 
 function isDBType(t: string) { return dbTypes.includes(t) }
@@ -106,7 +108,7 @@ export default function Connections() {
     const isFile = isFileType(ds.source_type)
     setForm({
       name: ds.name, source_type: ds.source_type,
-      db_fields: { host: fields.host || '', port: fields.port ?? null, database: fields.database || '', username: fields.username || '', password: fields.password || '', ssl: fields.ssl || false },
+      db_fields: { host: fields.host || '', port: fields.port ?? null, database: fields.database || '', username: fields.username || '', password: fields.password || '', ssl: fields.ssl || false, instance: fields.instance || '' },
       file_path: ds.file_path || '',
     })
     setSourceMode(isFile ? 'file' : 'database')
@@ -124,6 +126,16 @@ export default function Connections() {
     }
     if (editId) updateMutation.mutate({ ...payload, id: editId })
     else createMutation.mutate(payload)
+  }
+
+  const handleDuplicate = (ds: any) => {
+    const name = `Copia de ${ds.name}`
+    if (isFileType(ds.source_type)) {
+      createMutation.mutate({ name, source_type: ds.source_type, db_fields: { ...defaultDBFields }, file_path: ds.file_path || '' })
+    } else {
+      const fields = ds.db_fields || ds.config?.db_fields || { ...defaultDBFields }
+      createMutation.mutate({ name, source_type: ds.source_type, db_fields: { ...fields }, file_path: '' })
+    }
   }
 
   const handleTestConnection = async () => {
@@ -208,12 +220,20 @@ export default function Connections() {
               {form.source_type !== 'sqlite' ? (
                 <>
                   <div className="grid grid-cols-4 gap-4">
-                    <div className="col-span-3">
+                    <div className={form.source_type === 'sqlserver' ? 'col-span-2' : 'col-span-3'}>
                       <label className="block text-sm text-muted mb-1">Host / Servidor</label>
                       <input type="text" value={form.db_fields.host}
                         onChange={(e) => updateDBField('host', e.target.value)}
                         className="glass-input" placeholder="localhost, 192.168.1.100, db.example.com" />
                     </div>
+                    {form.source_type === 'sqlserver' && (
+                      <div className="col-span-1">
+                        <label className="block text-sm text-muted mb-1">Instancia</label>
+                        <input type="text" value={form.db_fields.instance}
+                          onChange={(e) => updateDBField('instance', e.target.value)}
+                          className="glass-input" placeholder="MSSQLSERVER" />
+                      </div>
+                    )}
                     <div>
                       <label className="block text-sm text-muted mb-1">Puerto</label>
                       <input type="number" value={form.db_fields.port ?? defaultPorts[form.source_type]}
@@ -362,7 +382,9 @@ export default function Connections() {
                   <p className="font-semibold">{ds.name}</p>
                   <p className="text-xs text-muted">
                     {sourceLabels[ds.source_type] || ds.source_type}
-                    {ds.db_fields?.host && ` · ${ds.db_fields.host}:${ds.db_fields.port || defaultPorts[ds.source_type] || ''}`}
+                    {ds.db_fields?.host && (ds.db_fields?.instance
+                      ? ` · ${ds.db_fields.host}\\${ds.db_fields.instance}`
+                      : ` · ${ds.db_fields.host}:${ds.db_fields.port || defaultPorts[ds.source_type] || ''}`)}
                     {ds.db_fields?.database && `/ ${ds.db_fields.database}`}
                     {ds.file_path && ` · ${ds.file_path.split('/').pop()}`}
                   </p>
@@ -370,6 +392,9 @@ export default function Connections() {
                 <div className="flex items-center gap-2 shrink-0">
                   <button onClick={() => handleEdit(ds)} className="btn-ghost p-2" title="Editar">
                     <Edit3 className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => handleDuplicate(ds)} className="btn-ghost p-2" title="Duplicar">
+                    <Copy className="w-4 h-4" />
                   </button>
                   <button onClick={() => setConfirmDelete(ds.id)} className="btn-ghost p-2 text-red-400" title="Eliminar">
                     <Trash2 className="w-4 h-4" />

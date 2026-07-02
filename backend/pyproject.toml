@@ -37,6 +37,7 @@ dependencies = [
     "psycopg2-binary>=2.9",
     "fpdf2>=2.8",
     "duckdb>=1.2",
+    "oracledb>=1.0",
 ]
 
 [project.scripts]
