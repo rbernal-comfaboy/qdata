@@ -10,12 +10,14 @@ _FILE_TYPES = {"csv", "excel", "json", "parquet"}
 _CHUNK_SIZE = 10_000
 
 
-def _apply_limit(sql: str, limit: int) -> str:
+def _apply_limit(sql: str, limit: int, source_type: str = "") -> str:
     sql = sql.strip().rstrip(";")
     upper = sql.upper()
     if "LIMIT" in upper.split()[-5:]:
         return sql
     if upper.startswith("SELECT"):
+        if source_type == "sqlserver":
+            return f"SELECT TOP {limit} * FROM ({sql}) AS _limited_"
         return f"SELECT * FROM ({sql}) AS _limited_ LIMIT {limit}"
     return sql
 
@@ -67,7 +69,7 @@ def load_data(source_type: str, connection_string: str, query: str, file_path: s
             kw["nrows"] = nrows
         df = _load_file(source_type, file_path, progress_callback=progress_callback, **kw)
     else:
-        q = _apply_limit(query, nrows) if nrows else query
+        q = _apply_limit(query, nrows, source_type) if nrows and source_type != "informix" else query
 
         def _load_with(q: str) -> pd.DataFrame:
             if source_type == "postgresql":
@@ -89,7 +91,7 @@ def load_data(source_type: str, connection_string: str, query: str, file_path: s
             elif source_type == "informix":
                 from qdata.connectors.informix import InformixConnector
                 c = InformixConnector(connection_string)
-                return c.load(q, progress_callback=progress_callback)
+                return c.load(q, progress_callback=progress_callback, nrows=nrows or 0)
             elif source_type == "sqlite":
                 from qdata.connectors.sqlite import SQLiteConnector
                 c = SQLiteConnector(file_path)

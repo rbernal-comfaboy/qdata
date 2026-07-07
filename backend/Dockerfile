@@ -28,11 +28,32 @@ RUN apt-get update && \
     rm /tmp/instantclient.zip && \
     for d in /opt/oracle/instantclient_*; do mv "$d" /opt/oracle/instantclient; break; done && \
     rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        rpm bc default-jre-headless \
+        libcrypt1 libpam0g libstdc++6 libncurses6 libelf1t64 && \
+    mkdir -p /var/lib/rpm && \
+    rpm --initdb && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY clientsdk.tar /tmp/clientsdk.tar
+RUN mkdir -p /tmp/csdk && tar -xf /tmp/clientsdk.tar -C /tmp/csdk && \
+    cd /tmp/csdk && chmod +x installclientsdk && \
+    { printf '\n1\n'; yes "" | head -n 5000; } | ./installclientsdk -DPRQCHECK=FALSE -DLICENSE_ACCEPTED=TRUE -DUSER_INSTALL_DIR=/opt/IBM/informix -DCHOSEN_FEATURE_LIST=SDK,SDK-ODBC,GLS,GLS-WEURAM -DCHOSEN_INSTALL_FEATURE_LIST=SDK,SDK-ODBC,GLS,GLS-WEURAM -DCHOSEN_INSTALL_SET=Custom; \
+    printf "[Informix]\nDescription=IBM Informix ODBC Driver\nDriver=/opt/IBM/informix/lib/cli/iclit09b.so\nSetup=/opt/IBM/informix/lib/cli/iclit09b.so\n" >> /etc/odbcinst.ini && \
+    printf "\n[InformixDM]\nDescription=IBM Informix ODBC Driver Manager\nDriver=/opt/IBM/informix/lib/cli/idmrs09a.so\nSetup=/opt/IBM/informix/lib/cli/idmrs09a.so\n" >> /etc/odbcinst.ini && \
+    rm -rf /tmp/clientsdk.tar /tmp/csdk
+
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
-COPY . .
+COPY qdata/ /app/qdata/
+COPY alembic/ /app/alembic/
+COPY alembic.ini /app/
+COPY pyproject.toml /app/
 ENV PYTHONPATH=/app
-ENV LD_LIBRARY_PATH=/opt/oracle/instantclient:$LD_LIBRARY_PATH
+ENV INFORMIXDIR=/opt/IBM/informix
+ENV LD_LIBRARY_PATH=/opt/IBM/informix/lib/cli:/opt/IBM/informix/lib/esql:/opt/oracle/instantclient
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
   CMD python -c "import http.client; c=http.client.HTTPConnection('localhost',8000); c.request('GET','/health'); r=c.getresponse(); assert r.status==200, f'status={r.status}'; r.read(); c.close()"

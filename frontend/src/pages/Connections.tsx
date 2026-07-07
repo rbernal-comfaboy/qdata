@@ -220,18 +220,18 @@ export default function Connections() {
               {form.source_type !== 'sqlite' ? (
                 <>
                   <div className="grid grid-cols-4 gap-4">
-                    <div className={form.source_type === 'sqlserver' ? 'col-span-2' : 'col-span-3'}>
+                    <div className={(form.source_type === 'sqlserver' || form.source_type === 'informix') ? 'col-span-2' : 'col-span-3'}>
                       <label className="block text-sm text-muted mb-1">Host / Servidor</label>
                       <input type="text" value={form.db_fields.host}
                         onChange={(e) => updateDBField('host', e.target.value)}
                         className="glass-input" placeholder="localhost, 192.168.1.100, db.example.com" />
                     </div>
-                    {form.source_type === 'sqlserver' && (
+                    {(form.source_type === 'sqlserver' || form.source_type === 'informix') && (
                       <div className="col-span-1">
                         <label className="block text-sm text-muted mb-1">Instancia</label>
                         <input type="text" value={form.db_fields.instance}
                           onChange={(e) => updateDBField('instance', e.target.value)}
-                          className="glass-input" placeholder="MSSQLSERVER" />
+                          className="glass-input" placeholder={form.source_type === 'informix' ? 'infonuevo_tcp' : 'MSSQLSERVER'} />
                       </div>
                     )}
                     <div>

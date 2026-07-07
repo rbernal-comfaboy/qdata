@@ -340,12 +340,11 @@ async def test_connection(req: TestConnectionRequest):
 
         tables = []
         if req.source_type == "informix":
-            from qdata.connectors.informix import _get_table_names
-            import pyodbc
-            conn = pyodbc.connect(conn_str, autocommit=True)
+            from qdata.connectors.informix import _create_informix_connection, _get_table_names
+            conn = _create_informix_connection(conn_str, autocommit=True)
             try:
-                conn.execute("SELECT 1 FROM systables WHERE tabid = 1")
                 cursor = conn.cursor()
+                cursor.execute("SELECT 1 FROM systables WHERE tabid = 1")
                 tables = _get_table_names(cursor)
             finally:
                 conn.close()
@@ -387,26 +386,12 @@ async def list_tables(
         raise HTTPException(status_code=404, detail="Data source not found")
     engine = _get_engine(ds)
     if ds.source_type == "informix":
-        import pyodbc
-        from qdata.connectors.informix import InformixConnector, _get_table_names
-        conn = pyodbc.connect(ds.connection_string or "", autocommit=True)
         try:
-            cursor = conn.cursor()
-            tables = _get_table_names(cursor)
-            cols = []
-            for t in tables:
-                cursor.execute(
-                    "SELECT c.colname, c.coltype, c.nulls "
-                    "FROM syscolumns c JOIN systables t ON c.tabid = t.tabid "
-                    "WHERE t.tabname = ? AND t.tabid >= 100",
-                    t,
-                )
-                for row in cursor.fetchall():
-                    cols.append({"table": t, "column": row[0], "type": str(row[1]), "nullable": row[2] == 1})
-            table_list = [{"name": t, "row_count": None} for t in tables]
-            return {"tables": table_list, "columns": cols}
-        finally:
-            conn.close()
+            from qdata.connectors.informix import get_tables_subprocess
+            table_list = get_tables_subprocess(ds.connection_string or "")
+            return {"tables": table_list, "columns": []}
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
     if not engine:
         return {"tables": [], "columns": []}
     try:
@@ -481,6 +466,13 @@ async def list_columns(
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Data source not found")
+    if ds.source_type == "informix":
+        try:
+            from qdata.connectors.informix import get_columns_subprocess
+            cols = get_columns_subprocess(ds.connection_string or "", table_name)
+            return {"columns": cols}
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
     engine = _get_engine(ds)
     if not engine:
         return {"columns": []}
@@ -591,10 +583,9 @@ async def preview_datasource_query(
     if not ds:
         raise HTTPException(status_code=404, detail="Data source not found")
 
-    limit = req.row_limit or 100
+    limit = req.row_limit or 10
     try:
-        kwargs = {"nrows": limit + 1} if ds.source_type in ("csv", "excel", "json", "parquet") else {}
-        df = load_data(ds.source_type, ds.connection_string or "", req.query, ds.file_path or "", **kwargs)
+        df = load_data(ds.source_type, ds.connection_string or "", req.query, ds.file_path or "", nrows=limit + 1)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error loading data: {e}")
 

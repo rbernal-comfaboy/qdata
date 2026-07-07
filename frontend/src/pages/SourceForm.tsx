@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   Save, X, AlertCircle, Database, Loader2,
-  Search, Code2, Table2, Lightbulb, Clock, ToggleLeft, ToggleRight,
+  Search, Code2, Table2, Lightbulb, Clock, ToggleLeft, ToggleRight, AlertTriangle,
 } from 'lucide-react'
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
@@ -31,7 +31,7 @@ export default function SourceForm() {
   const [query, setQuery] = useState('')
   const [selectedColumns, setSelectedColumns] = useState<string[]>([])
   const [rowLimit, setRowLimit] = useState<number | null>(null)
-  const [mode, setMode] = useState<'sql' | 'visual'>('sql')
+  const [mode, setMode] = useState<'sql' | 'visual'>('visual')
   const [saving, setSaving] = useState(false)
   const [storageMode, setStorageMode] = useState('connection')
   const [refreshCron, setRefreshCron] = useState('')
@@ -62,7 +62,10 @@ export default function SourceForm() {
   // Preview
   const [formPreview, setFormPreview] = useState<SourcePreview | null>(null)
   const [formPreviewLoading, setFormPreviewLoading] = useState(false)
+  const [formPreviewError, setFormPreviewError] = useState('')
   const [columnSamples, setColumnSamples] = useState<Record<string, any>>({})
+  const [tablesError, setTablesError] = useState('')
+  const [tableActiveTab, setTableActiveTab] = useState<'visual' | 'sql'>('visual')
 
   const filteredTables = tables.filter(t => t.name.toLowerCase().includes(tableSearch.toLowerCase()))
 
@@ -87,7 +90,9 @@ export default function SourceForm() {
       setStorageMode(sourceData.storage_mode || 'connection')
       setRefreshCron(sourceData.refresh_cron || '')
       setCronEnabled(!!sourceData.refresh_cron)
-      setMode(sourceData.query && !sourceData.selected_columns?.length ? 'sql' : 'visual')
+      const initialMode = sourceData.query && !sourceData.selected_columns?.length ? 'sql' : 'visual'
+      setMode(initialMode)
+      setTableActiveTab(initialMode)
       if (sourceData.preview_data) setFormPreview(sourceData.preview_data)
       if (sourceData.refresh_cron) {
         const parts = (sourceData.refresh_cron || '').split(/\s+/)
@@ -107,13 +112,15 @@ export default function SourceForm() {
   }, [sourceData])
 
   useEffect(() => {
-    if (!dsId) { setTables([]); setSelectedTable(''); setTableColumns([]); setSuggestions([]); return }
-    setTablesLoading(true)
-    setShowSuggest(false)
+    if (!dsId) { setTables([]); setSelectedTable(''); setTableColumns([]); setSuggestions([]); setTablesError(''); return }
+    setTablesLoading(true); setTablesError(''); setShowSuggest(false)
     api.get(`/datasources/${dsId}/tables`).then(r => {
       const raw = r.data.tables || []
       setTables(Array.isArray(raw) ? (typeof raw[0] === 'string' ? raw.map((n: string) => ({ name: n, row_count: null })) : raw) : [])
-    }).catch(() => {}).finally(() => setTablesLoading(false))
+      if (raw.length === 0) setTablesError('No se encontraron tablas en la base de datos')
+    }).catch(e => {
+      setTablesError(e?.response?.data?.detail || 'Error al cargar tablas')
+    }).finally(() => setTablesLoading(false))
   }, [dsId])
 
   const conn = useMemo(() => (connections || []).find((c: any) => c.id === dsId), [connections, dsId])
@@ -127,8 +134,9 @@ export default function SourceForm() {
   }, [dsId, isFile, mode, query, selectedTable])
 
   useEffect(() => {
-    if (!dsId || !previewQuery) { setFormPreview(null); setFormPreviewLoading(false); return }
+    if (!dsId || !previewQuery) { setFormPreview(null); setFormPreviewError(''); setFormPreviewLoading(false); return }
     setFormPreview(null)
+    setFormPreviewError('')
     setFormPreviewLoading(true)
     const timer = setTimeout(async () => {
       try {
@@ -139,7 +147,10 @@ export default function SourceForm() {
         })
         if (res.data.total_rows > 0) setFormPreview(res.data)
         else setFormPreview(null)
-      } catch { setFormPreview(null) } finally { setFormPreviewLoading(false) }
+      } catch (e: any) {
+        setFormPreview(null)
+        setFormPreviewError(e?.response?.data?.detail || 'Error al cargar vista previa')
+      } finally { setFormPreviewLoading(false) }
     }, 300)
     return () => clearTimeout(timer)
   }, [dsId, previewQuery, selectedColumns, rowLimit])
@@ -318,9 +329,9 @@ export default function SourceForm() {
       </div>
 
       <GlassContainer>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left: config */}
-          <div className="space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          {/* Left: config (2/5) */}
+          <div className="lg:col-span-2 space-y-4">
             <div>
               <label className="block text-sm text-muted mb-1">Nombre</label>
               <input type="text" value={name} onChange={e => setName(e.target.value)}
@@ -502,128 +513,11 @@ export default function SourceForm() {
 
             {dsId && !isFile && (
               <div>
-                <div className="flex gap-2 mb-3">
-                  <button onClick={() => setMode('sql')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                      mode === 'sql' ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-400' : 'bg-white/5 text-muted border border-white/10 hover:bg-white/10'
-                    }`}>
-                    <Code2 className="w-3.5 h-3.5" /> SQL
-                  </button>
-                  <button onClick={() => setMode('visual')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                      mode === 'visual' ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-400' : 'bg-white/5 text-muted border border-white/10 hover:bg-white/10'
-                    }`}>
-                    <Table2 className="w-3.5 h-3.5" /> Visual
-                  </button>
-                </div>
-
-                {mode === 'sql' ? (
-                  <div>
-                    <label className="block text-sm text-muted mb-1">Consulta SQL</label>
-                    <textarea value={query} onChange={e => setQuery(e.target.value)}
-                      className="glass-input font-mono text-sm min-h-[80px]"
-                      placeholder="SELECT * FROM tabla WHERE condicion" />
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div>
-                      <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted" />
-                        <input type="text" value={tableSearch} onChange={e => setTableSearch(e.target.value)}
-                          className="glass-input pl-9 text-sm" placeholder="buscar tabla..." />
-                      </div>
-                    </div>
-                    {tablesLoading ? (
-                      <div className="flex items-center gap-2 text-xs text-muted">
-                        <Loader2 className="w-3 h-3 animate-spin" /> Cargando tablas...
-                      </div>
-                    ) : filteredTables.length > 0 ? (
-                      <div className="max-h-32 overflow-y-auto space-y-0.5 border border-white/10 rounded-xl p-1.5">
-                        {filteredTables.map(t => (
-                          <button key={t.name} onClick={() => loadTableColumns(t.name)}
-                            className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-all ${
-                              selectedTable === t.name ? 'bg-indigo-500/20 text-indigo-300' : 'text-muted hover:bg-white/5'
-                            }`}>
-                            <span>{t.name}</span>
-                            {t.row_count !== null && t.row_count !== undefined && (
-                              <span className="ml-2 text-[10px] text-muted">{t.row_count.toLocaleString()} registros</span>
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    ) : <p className="text-xs text-muted">No hay tablas disponibles</p>}
-
-                    {columnsLoading ? (
-                      <div className="flex items-center gap-2 text-xs text-muted">
-                        <Loader2 className="w-3 h-3 animate-spin" /> Cargando columnas...
-                      </div>
-                    ) : tableColumns.length > 0 ? (
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="text-xs text-muted">{selectedTable} · {tableColumns.length} col(s)</label>
-                          <div className="flex gap-2 text-[10px]">
-                            <button onClick={selectAllCols} className="text-indigo-400 hover:text-indigo-300">Todas</button>
-                            <button onClick={deselectAllCols} className="text-muted hover:text-white">Ninguna</button>
-                          </div>
-                        </div>
-                        <div className="max-h-64 overflow-y-auto border border-white/10 rounded-xl p-1.5 space-y-0.5">
-                          {tableColumns.map(c => {
-                            const sampleVal = columnSamples[c.name]
-                            return (
-                              <label key={c.name}
-                                className={`flex items-center gap-1.5 px-1.5 py-1 rounded text-[11px] cursor-pointer transition-all ${
-                                  selectedColumns.includes(c.name) ? 'bg-indigo-500/15 text-indigo-300' : 'text-muted hover:bg-white/5'
-                                }`}>
-                                <input type="checkbox" checked={selectedColumns.includes(c.name)}
-                                  onChange={() => toggleColumn(c.name)} className="w-3 h-3 rounded accent-indigo-500 shrink-0" />
-                                <span className="truncate font-medium">{c.name}</span>
-                                <span className="text-[9px] opacity-40 shrink-0">{c.type}</span>
-                                {sampleVal !== undefined && (
-                                  <span className="ml-auto text-[10px] opacity-50 truncate max-w-[140px] font-mono" title={String(sampleVal)}>
-                                    {sampleVal === null ? <span className="text-red-400">NULL</span> : String(sampleVal).slice(0, 40)}
-                                  </span>
-                                )}
-                              </label>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    ) : selectedTable ? <p className="text-xs text-muted">Selecciona columnas</p> : null}
-                  </div>
-                )}
-
-                <div className="mt-3">
-                  <label className="block text-xs text-muted mb-1">
-                    Límite filas <span className="opacity-50">(opcional)</span>
-                  </label>
-                  <input type="number" value={rowLimit ?? ''} onChange={e => setRowLimit(e.target.value ? parseInt(e.target.value) : null)}
-                    className="glass-input w-full" placeholder="ej: 10000" min={1} />
-                </div>
-
-                <div className="mt-3">
-                  <button onClick={loadSuggest} disabled={suggestLoading}
-                    className="flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300 transition-colors">
-                    {suggestLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Lightbulb className="w-3 h-3" />}
-                    Sugerencias de tablas
-                  </button>
-                  {showSuggest && suggestions.length > 0 && (
-                    <div className="mt-1.5 space-y-1 max-h-36 overflow-y-auto border border-amber-500/20 bg-amber-500/5 rounded-xl p-1.5">
-                      {suggestions.map(s => (
-                        <button key={s.table} onClick={() => applySuggestion(s)}
-                          className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs hover:bg-amber-500/10 transition-all text-left">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="font-medium text-amber-200">{s.table}</span>
-                              {s.tags.slice(0, 2).map(t => (<span key={t} className="text-[9px] px-1 py-0.5 rounded-full bg-amber-500/15 text-amber-300">{t}</span>))}
-                            </div>
-                            <p className="text-[10px] text-muted mt-0.5">{s.reason}</p>
-                          </div>
-                          <span className="text-[10px] text-muted shrink-0 ml-2">{s.row_count != null ? s.row_count.toLocaleString() : `${s.columns} cols`}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <label className="block text-xs text-muted mb-1">
+                  Límite filas <span className="opacity-50">(opcional)</span>
+                </label>
+                <input type="number" value={rowLimit ?? ''} onChange={e => setRowLimit(e.target.value ? parseInt(e.target.value) : null)}
+                  className="glass-input" placeholder="ej: 10000" min={1} />
               </div>
             )}
 
@@ -650,10 +544,130 @@ export default function SourceForm() {
             </div>
           </div>
 
-          {/* Right: preview */}
-          <div>
-            {dsId && !isFile && previewQuery && (
-              <div className="border border-white/10 rounded-xl overflow-hidden h-full">
+          {/* Right: table panel + preview (3/5) */}
+          {dsId && !isFile ? (
+            <div className="lg:col-span-3 flex flex-col gap-3 h-full min-h-[500px]">
+              {/* Tab panel: Visual | SQL */}
+              <div className="border border-white/10 rounded-xl overflow-hidden flex flex-col flex-1">
+                <div className="flex border-b border-white/10 bg-white/5">
+                  <button onClick={() => { setTableActiveTab('visual'); setMode('visual') }}
+                    className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-all border-b-2 ${
+                      tableActiveTab === 'visual' ? 'border-indigo-400 text-indigo-300' : 'border-transparent text-muted hover:text-white'
+                    }`}>
+                    <Table2 className="w-4 h-4" /> Visual
+                  </button>
+                  <button onClick={() => { setTableActiveTab('sql'); setMode('sql') }}
+                    className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-all border-b-2 ${
+                      tableActiveTab === 'sql' ? 'border-indigo-400 text-indigo-300' : 'border-transparent text-muted hover:text-white'
+                    }`}>
+                    <Code2 className="w-4 h-4" /> SQL
+                  </button>
+                </div>
+
+                <div className="p-3 flex-1 overflow-auto">
+                  {tableActiveTab === 'visual' ? (
+                    <div className="space-y-3">
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted" />
+                        <input type="text" value={tableSearch} onChange={e => setTableSearch(e.target.value)}
+                          className="glass-input pl-9 text-sm" placeholder="Buscar tabla..." />
+                      </div>
+
+                      {tablesLoading ? (
+                        <div className="flex items-center gap-2 text-xs text-muted py-2">
+                          <Loader2 className="w-3 h-3 animate-spin" /> Cargando tablas...
+                        </div>
+                      ) : tablesError ? (
+                        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-2 text-xs text-red-300 flex items-start gap-2">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span>{tablesError}</span>
+                        </div>
+                      ) : filteredTables.length > 0 ? (
+                        <div className="max-h-40 overflow-y-auto space-y-0.5 border border-white/10 rounded-xl p-1.5">
+                          {filteredTables.map(t => (
+                            <button key={t.name} onClick={() => loadTableColumns(t.name)}
+                              className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-all ${
+                                selectedTable === t.name ? 'bg-indigo-500/20 text-indigo-300' : 'text-muted hover:bg-white/5'
+                              }`}>
+                              <span>{t.name}</span>
+                              {t.row_count !== null && t.row_count !== undefined && (
+                                <span className="ml-2 text-[10px] text-muted">{t.row_count.toLocaleString()} registros</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted py-2">No hay tablas disponibles</p>
+                      )}
+
+                      {columnsLoading ? (
+                        <div className="flex items-center gap-2 text-xs text-muted py-2">
+                          <Loader2 className="w-3 h-3 animate-spin" /> Cargando columnas...
+                        </div>
+                      ) : tableColumns.length > 0 ? (
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-xs text-muted">{selectedTable} · {tableColumns.length} col(s)</label>
+                            <div className="flex gap-2 text-[10px]">
+                              <button onClick={selectAllCols} className="text-indigo-400 hover:text-indigo-300">Todas</button>
+                              <button onClick={deselectAllCols} className="text-muted hover:text-white">Ninguna</button>
+                            </div>
+                          </div>
+                          <div className="max-h-48 overflow-y-auto border border-white/10 rounded-xl p-1.5 space-y-0.5">
+                            {tableColumns.map(c => {
+                              const sampleVal = columnSamples[c.name]
+                              return (
+                                <label key={c.name}
+                                  className={`flex items-center gap-1.5 px-1.5 py-1 rounded text-[11px] cursor-pointer transition-all ${
+                                    selectedColumns.includes(c.name) ? 'bg-indigo-500/15 text-indigo-300' : 'text-muted hover:bg-white/5'
+                                  }`}>
+                                  <input type="checkbox" checked={selectedColumns.includes(c.name)}
+                                    onChange={() => toggleColumn(c.name)} className="w-3 h-3 rounded accent-indigo-500 shrink-0" />
+                                  <span className="truncate font-medium">{c.name}</span>
+                                  <span className="text-[9px] opacity-40 shrink-0">{c.type}</span>
+                                  {sampleVal !== undefined && (
+                                    <span className="ml-auto text-[10px] opacity-50 truncate max-w-[140px] font-mono" title={String(sampleVal)}>
+                                      {sampleVal === null ? <span className="text-red-400">NULL</span> : String(sampleVal).slice(0, 40)}
+                                    </span>
+                                  )}
+                                </label>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      ) : selectedTable ? <p className="text-xs text-muted">Sin columnas</p> : null}
+
+                      <div className="flex items-center gap-2 pt-1">
+                        <button onClick={loadSuggest} disabled={suggestLoading}
+                          className="flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300 transition-colors">
+                          {suggestLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Lightbulb className="w-3 h-3" />}
+                          Sugerencias
+                        </button>
+                        {showSuggest && suggestions.length > 0 && (
+                          <div className="flex-1 max-h-28 overflow-y-auto border border-amber-500/20 bg-amber-500/5 rounded-lg p-1 space-y-0.5">
+                            {suggestions.map(s => (
+                              <button key={s.table} onClick={() => applySuggestion(s)}
+                                className="w-full flex items-center justify-between px-2 py-1 rounded text-[11px] hover:bg-amber-500/10 transition-all text-left">
+                                <span className="font-medium text-amber-200 truncate">{s.table}</span>
+                                <span className="text-[10px] text-muted shrink-0 ml-2">{s.row_count != null ? s.row_count.toLocaleString() : `${s.columns} cols`}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <textarea value={query} onChange={e => setQuery(e.target.value)}
+                        className="glass-input font-mono text-sm w-full min-h-[120px] resize-y"
+                        placeholder="SELECT * FROM tabla WHERE condicion" />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Preview panel */}
+              <div className="border border-white/10 rounded-xl overflow-hidden flex flex-col flex-1 min-h-[180px]">
                 <div className="flex items-center justify-between px-3 py-2 bg-white/5 border-b border-white/10">
                   <div className="flex items-center gap-2">
                     <Database className="w-4 h-4 text-indigo-400" />
@@ -664,8 +678,13 @@ export default function SourceForm() {
                     {formPreview && <span className="text-muted font-mono">{formPreview.total_rows.toLocaleString()} registro(s)</span>}
                   </div>
                 </div>
-                <div className="max-h-[400px] overflow-auto">
-                  {formPreview ? (
+                <div className="flex-1 overflow-auto">
+                  {formPreviewError ? (
+                    <div className="h-32 flex items-center justify-center text-xs text-red-300 px-4 text-center gap-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>{formPreviewError}</span>
+                    </div>
+                  ) : formPreview ? (
                     <table className="w-full text-xs border-collapse">
                       <thead className="sticky top-0 bg-[#1a1a2e] z-10">
                         <tr className="border-b border-white/10">
@@ -678,7 +697,7 @@ export default function SourceForm() {
                         {formPreview.rows.map((row, ri) => (
                           <tr key={ri} className="border-b border-white/5 hover:bg-white/5">
                             {row.map((val: any, ci) => (
-                              <td key={ci} className="py-1 px-2 truncate max-w-[140px]">{val === null ? <span className="text-red-400">NULL</span> : String(val)}</td>
+                              <td key={ci} className="py-1 px-2 truncate max-w-[160px]">{val === null ? <span className="text-red-400">NULL</span> : String(val)}</td>
                             ))}
                           </tr>
                         ))}
@@ -690,27 +709,25 @@ export default function SourceForm() {
                     </div>
                   ) : (
                     <div className="h-32 flex items-center justify-center text-xs text-muted px-4 text-center">
-                      {mode === 'visual' ? 'Selecciona una tabla para ver la vista previa' : 'Escribe una consulta SQL para ver la vista previa'}
+                      {tableActiveTab === 'visual' ? 'Selecciona una tabla para ver la vista previa' : 'Escribe una consulta SQL para ver la vista previa'}
                     </div>
                   )}
                 </div>
               </div>
-            )}
-            {dsId && isFile && (
-              <div className="border border-white/10 rounded-xl p-6 flex flex-col items-center justify-center h-full text-center">
-                <Database className="w-8 h-8 text-muted mb-2" />
-                <p className="text-sm text-muted">Archivo seleccionado</p>
-                <p className="text-xs text-muted mt-1">Los datos se cargarán al ejecutar el análisis</p>
-              </div>
-            )}
-            {!dsId && (
-              <div className="border border-dashed border-white/10 rounded-xl p-6 flex flex-col items-center justify-center h-full text-center">
-                <Database className="w-8 h-8 text-muted mb-2" />
-                <p className="text-sm text-muted">Selecciona una conexión</p>
-                <p className="text-xs text-muted mt-1">Aparecerá una vista previa de los datos aquí</p>
-              </div>
-            )}
-          </div>
+            </div>
+          ) : dsId && isFile ? (
+            <div className="lg:col-span-3 border border-white/10 rounded-xl p-6 flex flex-col items-center justify-center text-center">
+              <Database className="w-8 h-8 text-muted mb-2" />
+              <p className="text-sm text-muted">Archivo seleccionado</p>
+              <p className="text-xs text-muted mt-1">Los datos se cargarán al ejecutar el análisis</p>
+            </div>
+          ) : (
+            <div className="lg:col-span-3 border border-dashed border-white/10 rounded-xl p-6 flex flex-col items-center justify-center text-center">
+              <Database className="w-8 h-8 text-muted mb-2" />
+              <p className="text-sm text-muted">Selecciona una conexión</p>
+              <p className="text-xs text-muted mt-1">Aparecerá el explorador de tablas aquí</p>
+            </div>
+          )}
         </div>
       </GlassContainer>
 

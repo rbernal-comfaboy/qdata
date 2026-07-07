@@ -18,6 +18,8 @@ router = APIRouter()
 
 
 def _safe_val(v: Any) -> Any:
+    if hasattr(v, "item"):
+        return _safe_val(v.item())
     if isinstance(v, (float, int)):
         if math.isinf(v) or math.isnan(v):
             return str(v)
@@ -26,8 +28,6 @@ def _safe_val(v: Any) -> Any:
         return {k: _safe_val(v) for k, v in v.items()}
     if isinstance(v, (list, tuple)):
         return [_safe_val(x) for x in v]
-    if hasattr(v, "item"):
-        return _safe_val(v.item())
     if v is None:
         return None
     try:
@@ -58,6 +58,7 @@ class SourceUpdate(BaseModel):
 
 
 @router.get("/")
+@router.get("")
 async def list_sources(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
@@ -80,10 +81,10 @@ async def list_sources(
                     count_sql = re.sub(r"SELECT\s+.+?\s+FROM", "SELECT COUNT(*) FROM", q, count=1, flags=re.I)
                     if count_sql != q:
                         df = load_data(ds.source_type, ds.connection_string or "", count_sql, "")
-                        total_rows = df.iloc[0, 0] if not df.empty else None
+                        total_rows = _safe_val(df.iloc[0, 0] if not df.empty else None)
                 if total_rows is None and is_file:
                     df = load_data(ds.source_type, ds.connection_string or "", "", ds.file_path or "")
-                    total_rows = len(df)
+                    total_rows = _safe_val(len(df))
             except Exception:
                 pass
         out.append({
@@ -124,6 +125,7 @@ async def _preload_source(source_id: str, data_source_id: str, query: str, file_
 
 
 @router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_source(
     req: SourceCreate,
     user: User = Depends(get_current_user),
@@ -318,6 +320,19 @@ async def preview_source(
     if not ds:
         raise HTTPException(status_code=404, detail="Data source not found")
 
+    is_file = ds.source_type in ("csv", "excel", "json", "parquet", "txt")
+
+    total = None
+    if s.query and not is_file:
+        try:
+            import re
+            count_sql = re.sub(r"SELECT\s+.+?\s+FROM", "SELECT COUNT(*) FROM", s.query, count=1, flags=re.I)
+            if count_sql != s.query:
+                df_count = load_data(ds.source_type, ds.connection_string or "", count_sql, "")
+                total = int(df_count.iloc[0, 0]) if not df_count.empty else None
+        except Exception:
+            pass
+
     try:
         kwargs = {"nrows": 11}
         kwargs["storage_mode"] = s.storage_mode or "memory"
@@ -328,14 +343,20 @@ async def preview_source(
     if df.empty:
         raise HTTPException(status_code=400, detail="No data returned")
 
+    if total is None:
+        try:
+            df_full = load_data(ds.source_type, ds.connection_string or "", s.query or "", ds.file_path or "")
+            total = len(df_full)
+        except Exception:
+            total = len(df)
+
     if s.selected_columns:
         df = df[[c for c in s.selected_columns if c in df.columns]]
 
-    if s.row_limit and len(df) > s.row_limit:
-        df = df.head(s.row_limit)
+    if s.row_limit and total > s.row_limit:
+        total = s.row_limit
 
-    total = len(df)
-    head = df.head(min(20, total))
+    head = df.head(min(20, len(df)))
     preview = {
         "columns": [str(c) for c in df.columns],
         "rows": json.loads(head.to_json(orient="values")),
