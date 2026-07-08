@@ -48,7 +48,11 @@ async def list_processes(
             connection_label = fp.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] if fp else None
         else:
             source_label = st.upper() if st else None
-            connection_label = cs or fp or None
+            m = _re.search(r"(?:DATABASE|Database)=([^;]+)", cs)
+            db_name = m.group(1).upper() if m else None
+            if not db_name:
+                db_name = cs.rsplit("/", 1)[-1].split("?")[0] if "/" in cs else None
+            connection_label = db_name or cs or fp or None
         return source_label, connection_label
 
     query = select(Project).where(Project.user_id == user.id)
