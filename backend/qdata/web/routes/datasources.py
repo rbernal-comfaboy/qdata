@@ -265,10 +265,9 @@ async def update_datasource(
     if req.config is not None:
         ds.config = req.config
     if req.db_fields is not None:
-        config = ds.config or {}
-        config["db_fields"] = req.db_fields.model_dump()
-        ds.config = config
-        ds.connection_string = build_connection_string(ds.source_type, config["db_fields"])
+        new_config = {**(ds.config or {}), "db_fields": req.db_fields.model_dump()}
+        ds.config = new_config
+        ds.connection_string = build_connection_string(ds.source_type, new_config["db_fields"])
 
     await session.commit()
     return {"ok": True}
