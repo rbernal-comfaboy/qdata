@@ -129,13 +129,17 @@ export default function Connections() {
   }
 
   const handleDuplicate = (ds: any) => {
-    const name = `Copia de ${ds.name}`
-    if (isFileType(ds.source_type)) {
-      createMutation.mutate({ name, source_type: ds.source_type, db_fields: { ...defaultDBFields }, file_path: ds.file_path || '' })
-    } else {
-      const fields = ds.db_fields || ds.config?.db_fields || { ...defaultDBFields }
-      createMutation.mutate({ name, source_type: ds.source_type, db_fields: { ...fields }, file_path: '' })
-    }
+    const isFile = isFileType(ds.source_type)
+    const fields = isFile ? { ...defaultDBFields } : (ds.db_fields || ds.config?.db_fields || { ...defaultDBFields })
+    setForm({
+      name: `Copia de ${ds.name}`, source_type: ds.source_type,
+      db_fields: { ...fields },
+      file_path: ds.file_path || '',
+    })
+    setSourceMode(isFile ? 'file' : 'database')
+    setEditId(null)
+    setShowForm(true)
+    setTestResult(null)
   }
 
   const handleTestConnection = async () => {
