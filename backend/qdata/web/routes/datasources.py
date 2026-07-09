@@ -184,6 +184,7 @@ def _serialize(ds: DataSource) -> dict:
         "file_path": ds.file_path or "",
         "config": ds.config or {},
         "db_fields": extract_db_fields(ds.source_type, ds.config, ds.connection_string),
+        "sort_order": ds.sort_order or 0,
         "created_at": ds.created_at.isoformat() if ds.created_at else None,
     }
 
@@ -194,9 +195,11 @@ async def list_datasources(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    from sqlalchemy import desc
+    from sqlalchemy import nulls_last
     result = await session.execute(
-        select(DataSource).where(DataSource.user_id == user.id).order_by(desc(DataSource.created_at))
+        select(DataSource)
+        .where(DataSource.user_id == user.id)
+        .order_by(nulls_last(DataSource.sort_order.asc()), DataSource.created_at.desc())
     )
     return [_serialize(ds) for ds in result.scalars().all()]
 
@@ -223,10 +226,17 @@ async def create_datasource(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    from sqlalchemy import func
+
     config = req.config or {}
     if req.db_fields.host:
         config["db_fields"] = req.db_fields.model_dump()
     connection_string = build_connection_string(req.source_type, config.get("db_fields", {})) if config.get("db_fields") else ""
+
+    max_order = await session.scalar(
+        select(func.coalesce(func.max(DataSource.sort_order), -1))
+        .where(DataSource.user_id == user.id)
+    )
 
     ds = DataSource(
         user_id=user.id,
@@ -235,11 +245,39 @@ async def create_datasource(
         connection_string=connection_string,
         file_path=req.file_path,
         config=config,
+        sort_order=(max_order or 0) + 1,
     )
     session.add(ds)
     await session.commit()
     await session.refresh(ds)
     return _serialize(ds)
+
+
+class ReorderItem(BaseModel):
+    id: str
+    sort_order: int
+
+
+class ReorderRequest(BaseModel):
+    items: list[ReorderItem]
+
+
+@router.put("/reorder")
+async def reorder_datasources(
+    req: ReorderRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    from sqlalchemy import update as sql_update
+
+    for item in req.items:
+        await session.execute(
+            sql_update(DataSource)
+            .where(DataSource.id == item.id, DataSource.user_id == user.id)
+            .values(sort_order=item.sort_order)
+        )
+    await session.commit()
+    return {"ok": True}
 
 
 @router.put("/{ds_id}")

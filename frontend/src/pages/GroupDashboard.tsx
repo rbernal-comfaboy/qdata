@@ -27,7 +27,7 @@ export default function GroupDashboard() {
 
   const { group, summary, scores_timeline, project_scores, severity_counts, rule_summary } = data
 
-  const sevPieData = Object.entries(severity_counts).filter(([,v]) => v > 0).map(([k, v]) => ({ name: k, value: v }))
+  const sevPieData = Object.entries(severity_counts).filter(([,v]: [string, any]) => v > 0).map(([k, v]) => ({ name: k, value: v }))
 
   const ruleChartData = rule_summary.slice(0, 10).map((r: any) => ({
     name: r.rule_name.replace('_check', '').replace('_', ' ').slice(0, 15),

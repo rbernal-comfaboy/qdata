@@ -160,6 +160,7 @@ class DataSource(Base):
     connection_string = Column(Text)
     file_path = Column(Text)
     config = Column(JSON)
+    sort_order = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 

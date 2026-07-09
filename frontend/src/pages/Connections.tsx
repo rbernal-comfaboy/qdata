@@ -1,9 +1,12 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Database, Plus, Edit3, Trash2, Copy, Save, X, AlertCircle, Upload, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronUp,
+  Database, Plus, Edit3, Trash2, Copy, Save, X, AlertCircle, Upload, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronUp, GripVertical,
 } from 'lucide-react'
 import { useDropzone } from 'react-dropzone'
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
 
@@ -48,6 +51,66 @@ const fileTypes = ['csv', 'excel', 'json', 'parquet']
 
 function isDBType(t: string) { return dbTypes.includes(t) }
 function isFileType(t: string) { return fileTypes.includes(t) }
+
+function SortableConnectionItem({ ds, confirmDelete, handleEdit, handleDuplicate, setConfirmDelete, deleteMutation }: any) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: ds.id })
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 50 : 'auto',
+  }
+  return (
+    <div ref={setNodeRef} style={style}>
+      <GlassContainer className="hover:bg-white/10 transition-all">
+        <div className="flex items-center gap-4">
+          <button {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing p-1 text-muted hover:text-white shrink-0" title="Arrastrar para reordenar">
+            <GripVertical className="w-4 h-4" />
+          </button>
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+            isFileType(ds.source_type) ? 'bg-amber-500/20' : 'bg-indigo-500/20'
+          }`}>
+            {isFileType(ds.source_type)
+              ? <Upload className="w-5 h-5 text-amber-400" />
+              : <Database className="w-5 h-5 text-indigo-400" />
+            }
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold">{ds.name}</p>
+            <p className="text-xs text-muted">
+              {sourceLabels[ds.source_type] || ds.source_type}
+              {ds.db_fields?.host && (ds.db_fields?.instance
+                ? ` · ${ds.db_fields.host}\\${ds.db_fields.instance}`
+                : ` · ${ds.db_fields.host}:${ds.db_fields.port || defaultPorts[ds.source_type] || ''}`)}
+              {ds.db_fields?.database && `/ ${ds.db_fields.database}`}
+              {ds.file_path && ` · ${ds.file_path.split('/').pop()}`}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button onClick={() => handleEdit(ds)} className="btn-ghost p-2" title="Editar">
+              <Edit3 className="w-4 h-4" />
+            </button>
+            <button onClick={() => handleDuplicate(ds)} className="btn-ghost p-2" title="Duplicar">
+              <Copy className="w-4 h-4" />
+            </button>
+            <button onClick={() => setConfirmDelete(ds.id)} className="btn-ghost p-2 text-red-400" title="Eliminar">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+        {confirmDelete === ds.id && (
+          <div className="mt-3 p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center gap-3 flex-wrap">
+            <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
+            <span className="text-sm text-red-300">¿Eliminar esta conexión?</span>
+            <button onClick={() => deleteMutation.mutate(ds.id)} disabled={deleteMutation.isPending}
+              className="btn-primary !bg-red-500 !bg-none text-xs py-1 px-3">Eliminar</button>
+            <button onClick={() => setConfirmDelete(null)} className="btn-ghost text-xs py-1 px-3">Cancelar</button>
+          </div>
+        )}
+      </GlassContainer>
+    </div>
+  )
+}
 
 export default function Connections() {
   const queryClient = useQueryClient()
@@ -98,6 +161,26 @@ export default function Connections() {
     mutationFn: (id: string) => api.delete(`/datasources/${id}`),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['datasources'] }); setConfirmDelete(null) },
   })
+
+  const reorderMutation = useMutation({
+    mutationFn: (items: { id: string; sort_order: number }[]) => api.put('/datasources/reorder', { items }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['datasources'] }),
+  })
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  )
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id || !sources) return
+    const ids = sources.map((ds: any) => ds.id)
+    const oldIdx = ids.indexOf(active.id)
+    const newIdx = ids.indexOf(over.id)
+    if (oldIdx === -1 || newIdx === -1) return
+    const reordered = arrayMove(ids, oldIdx, newIdx)
+    reorderMutation.mutate(reordered.map((id, i) => ({ id: id as string, sort_order: i })))
+  }
 
   const resetForm = () => {
     setShowForm(false); setEditId(null); setForm(emptyForm); setSourceMode('database'); setTestResult(null)
@@ -370,53 +453,23 @@ export default function Connections() {
       {isLoading ? (
         <div className="space-y-4">{[1, 2].map((i) => <div key={i} className="skeleton h-20 rounded-xl" />)}</div>
       ) : sources?.length > 0 ? (
-        <div className="space-y-3">
-          {sources.map((ds: any) => (
-            <GlassContainer key={ds.id} className="hover:bg-white/10 transition-all">
-              <div className="flex items-center gap-4">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                  isFileType(ds.source_type) ? 'bg-amber-500/20' : 'bg-indigo-500/20'
-                }`}>
-                  {isFileType(ds.source_type)
-                    ? <Upload className="w-5 h-5 text-amber-400" />
-                    : <Database className="w-5 h-5 text-indigo-400" />
-                  }
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold">{ds.name}</p>
-                  <p className="text-xs text-muted">
-                    {sourceLabels[ds.source_type] || ds.source_type}
-                    {ds.db_fields?.host && (ds.db_fields?.instance
-                      ? ` · ${ds.db_fields.host}\\${ds.db_fields.instance}`
-                      : ` · ${ds.db_fields.host}:${ds.db_fields.port || defaultPorts[ds.source_type] || ''}`)}
-                    {ds.db_fields?.database && `/ ${ds.db_fields.database}`}
-                    {ds.file_path && ` · ${ds.file_path.split('/').pop()}`}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <button onClick={() => handleEdit(ds)} className="btn-ghost p-2" title="Editar">
-                    <Edit3 className="w-4 h-4" />
-                  </button>
-                  <button onClick={() => handleDuplicate(ds)} className="btn-ghost p-2" title="Duplicar">
-                    <Copy className="w-4 h-4" />
-                  </button>
-                  <button onClick={() => setConfirmDelete(ds.id)} className="btn-ghost p-2 text-red-400" title="Eliminar">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-              {confirmDelete === ds.id && (
-                <div className="mt-3 p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center gap-3 flex-wrap">
-                  <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
-                  <span className="text-sm text-red-300">¿Eliminar esta conexión?</span>
-                  <button onClick={() => deleteMutation.mutate(ds.id)} disabled={deleteMutation.isPending}
-                    className="btn-primary !bg-red-500 !bg-none text-xs py-1 px-3">Eliminar</button>
-                  <button onClick={() => setConfirmDelete(null)} className="btn-ghost text-xs py-1 px-3">Cancelar</button>
-                </div>
-              )}
-            </GlassContainer>
-          ))}
-        </div>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={sources.map((ds: any) => ds.id)} strategy={verticalListSortingStrategy}>
+            <div className="space-y-3">
+              {sources.map((ds: any) => (
+                <SortableConnectionItem
+                  key={ds.id}
+                  ds={ds}
+                  confirmDelete={confirmDelete}
+                  handleEdit={handleEdit}
+                  handleDuplicate={handleDuplicate}
+                  setConfirmDelete={setConfirmDelete}
+                  deleteMutation={deleteMutation}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       ) : (
         <GlassContainer className="text-center py-16">
           <Database className="w-16 h-16 mx-auto mb-4 text-muted" />
