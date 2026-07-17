@@ -22,6 +22,7 @@ import Sources from './pages/Sources'
 import SourceForm from './pages/SourceForm'
 import Groups from './pages/Groups'
 import GroupDashboard from './pages/GroupDashboard'
+import AdminUsers from './pages/AdminUsers'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token)
@@ -63,6 +64,7 @@ export default function App() {
           <Route path="groups" element={<Groups />} />
           <Route path="groups/:groupId" element={<GroupDashboard />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="admin/users" element={<AdminUsers />} />
         </Route>
       </Routes>
     </BrowserRouter>

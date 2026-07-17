@@ -9,6 +9,7 @@ import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } 
 import { CSS } from '@dnd-kit/utilities'
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
+import { useAuthStore } from '../hooks/useAuth'
 
 interface DBFields {
   host: string
@@ -52,7 +53,7 @@ const fileTypes = ['csv', 'excel', 'json', 'parquet']
 function isDBType(t: string) { return dbTypes.includes(t) }
 function isFileType(t: string) { return fileTypes.includes(t) }
 
-function SortableConnectionItem({ ds, confirmDelete, handleEdit, handleDuplicate, setConfirmDelete, deleteMutation }: any) {
+function SortableConnectionItem({ ds, confirmDelete, handleEdit, handleDuplicate, setConfirmDelete, deleteMutation, isAdmin }: any) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: ds.id })
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -93,9 +94,11 @@ function SortableConnectionItem({ ds, confirmDelete, handleEdit, handleDuplicate
             <button onClick={() => handleDuplicate(ds)} className="btn-ghost p-2" title="Duplicar">
               <Copy className="w-4 h-4" />
             </button>
-            <button onClick={() => setConfirmDelete(ds.id)} className="btn-ghost p-2 text-red-400" title="Eliminar">
-              <Trash2 className="w-4 h-4" />
-            </button>
+            {isAdmin && (
+              <button onClick={() => setConfirmDelete(ds.id)} className="btn-ghost p-2 text-red-400" title="Eliminar">
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
         {confirmDelete === ds.id && (
@@ -114,6 +117,8 @@ function SortableConnectionItem({ ds, confirmDelete, handleEdit, handleDuplicate
 
 export default function Connections() {
   const queryClient = useQueryClient()
+  const currentUser = useAuthStore((s) => s.user)
+  const isAdmin = currentUser?.role === 'admin'
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [form, setForm] = useState<DSForm>(emptyForm)
@@ -465,6 +470,7 @@ export default function Connections() {
                   handleDuplicate={handleDuplicate}
                   setConfirmDelete={setConfirmDelete}
                   deleteMutation={deleteMutation}
+                  isAdmin={isAdmin}
                 />
               ))}
             </div>

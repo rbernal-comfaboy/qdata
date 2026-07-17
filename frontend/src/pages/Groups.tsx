@@ -4,11 +4,14 @@ import { Link } from 'react-router-dom'
 import { FolderOpen, Plus, Trash2, Edit3, BarChart3, Calendar, FileText } from 'lucide-react'
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
+import { useAuthStore } from '../hooks/useAuth'
 
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#f97316']
 
 export default function Groups() {
   const qc = useQueryClient()
+  const currentUser = useAuthStore((s) => s.user)
+  const isAdmin = currentUser?.role === 'admin'
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [name, setName] = useState('')
@@ -111,21 +114,23 @@ export default function Groups() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {groups.map((g: any) => (
             <GlassContainer key={g.id} className="relative group">
-              <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button onClick={() => startEdit(g)} className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors">
-                  <Edit3 className="w-3.5 h-3.5" />
-                </button>
-                <button onClick={() => { if (confirm('¿Eliminar este grupo de análisis?')) deleteMut.mutate(g.id) }}
-                  className="p-1.5 rounded-lg bg-white/10 hover:bg-red-500/30 text-white transition-colors">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
+              {isAdmin && (
+                <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button onClick={() => startEdit(g)} className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors">
+                    <Edit3 className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => { if (confirm('¿Eliminar este grupo de análisis?')) deleteMut.mutate(g.id) }}
+                    className="p-1.5 rounded-lg bg-white/10 hover:bg-red-500/30 text-white transition-colors">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-4 h-4 rounded-full" style={{ backgroundColor: g.color }} />
                 <h3 className="text-lg font-semibold text-white">{g.name}</h3>
               </div>
               {g.description && <p className="text-muted text-sm mb-4 line-clamp-2">{g.description}</p>}
-              <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="grid grid-cols-3 gap-3 mb-4">
                 <Link to={`/processes?groupId=${g.id}`}
                   className="bg-white/5 rounded-lg p-2 text-center hover:bg-indigo-500/20 transition-colors block">
                   <p className="text-xl font-bold text-white">{g.project_count}</p>
@@ -136,6 +141,32 @@ export default function Groups() {
                   <p className="text-xl font-bold text-white">{g.report_count}</p>
                   <p className="text-xs text-muted">Reportes</p>
                 </Link>
+                {g.avg_score !== null && g.avg_score !== undefined ? (
+                  <div className={`rounded-lg p-2 text-center ${
+                    g.avg_score >= 90 ? 'bg-green-500/20' :
+                    g.avg_score >= 70 ? 'bg-emerald-500/20' :
+                    g.avg_score >= 50 ? 'bg-yellow-500/20' :
+                    'bg-red-500/20'
+                  }`}>
+                    <p className={`text-xl font-bold ${
+                      g.avg_score >= 90 ? 'text-green-400' :
+                      g.avg_score >= 70 ? 'text-emerald-400' :
+                      g.avg_score >= 50 ? 'text-yellow-400' :
+                      'text-red-400'
+                    }`}>{g.avg_score}</p>
+                    <p className={`text-xs ${
+                      g.avg_score >= 90 ? 'text-green-400/70' :
+                      g.avg_score >= 70 ? 'text-emerald-400/70' :
+                      g.avg_score >= 50 ? 'text-yellow-400/70' :
+                      'text-red-400/70'
+                    }`}>Score</p>
+                  </div>
+                ) : (
+                  <div className="rounded-lg p-2 text-center bg-white/5">
+                    <p className="text-xl font-bold text-muted">—</p>
+                    <p className="text-xs text-muted">Score</p>
+                  </div>
+                )}
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1 text-xs text-muted">

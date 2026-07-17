@@ -3,34 +3,57 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
-from sqlalchemy import select
+from datetime import date, datetime
+from pydantic import BaseModel
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy.orm import joinedload
 
 from qdata.auth.dependencies import get_current_user
+from qdata.auth.permissions import require_role
 from qdata.core.descriptions import describe_detail, describe_error
-from qdata.db.models import Project, Report, User
+from qdata.db.models import ErrorAction, GroupPermission, Project, Report, User
 from qdata.db.session import get_session
+
+
+class SetActionRequest(BaseModel):
+    status: str
 
 router = APIRouter()
 
 
 @router.get("/")
+@router.get("")
 async def list_reports(
     group_id: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     limit: int = 20,
     offset: int = 0,
 ):
-    query = (
-        select(Report)
-        .options(joinedload(Report.project))
-        .where(Report.user_id == user.id)
-    )
+    if user.role == "admin":
+        query = select(Report).options(joinedload(Report.project))
+    else:
+        subq = select(GroupPermission.group_id).where(GroupPermission.user_id == user.id)
+        query = (
+            select(Report)
+            .options(joinedload(Report.project))
+            .where(
+                or_(
+                    Report.user_id == user.id,
+                    Report.project.has(Project.group_id.in_(subq)),
+                )
+            )
+        )
     if group_id:
         query = query.where(Report.project.has(group_id=group_id))
+    if start_date:
+        query = query.where(Report.executed_at >= datetime.combine(start_date, datetime.min.time()))
+    if end_date:
+        query = query.where(Report.executed_at <= datetime.combine(end_date, datetime.max.time()))
     result = await session.execute(
         query.order_by(Report.executed_at.desc()).offset(offset).limit(limit)
     )
@@ -88,11 +111,22 @@ async def get_report(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(Report)
-        .options(joinedload(Report.project))
-        .where(Report.id == report_id, Report.user_id == user.id)
-    )
+    if user.role == "admin":
+        base_q = select(Report).options(joinedload(Report.project)).where(Report.id == report_id)
+    else:
+        subq = select(GroupPermission.group_id).where(GroupPermission.user_id == user.id)
+        base_q = (
+            select(Report)
+            .options(joinedload(Report.project))
+            .where(
+                Report.id == report_id,
+                or_(
+                    Report.user_id == user.id,
+                    Report.project.has(Project.group_id.in_(subq)),
+                )
+            )
+        )
+    result = await session.execute(base_q)
     report = result.unique().scalar_one_or_none()
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
@@ -116,12 +150,10 @@ async def get_report(
 @router.delete("/{report_id}")
 async def delete_report(
     report_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(["admin"])),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(Report).where(Report.id == report_id, Report.user_id == user.id)
-    )
+    result = await session.execute(select(Report).where(Report.id == report_id))
     report = result.scalar_one_or_none()
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
@@ -130,16 +162,87 @@ async def delete_report(
     return {"status": "deleted"}
 
 
+@router.get("/{report_id}/rules/{rule_idx}/actions")
+async def get_rule_actions(
+    report_id: str,
+    rule_idx: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(ErrorAction).where(
+            ErrorAction.report_id == report_id,
+            ErrorAction.rule_index == rule_idx,
+        )
+    )
+    actions = result.scalars().all()
+    return [
+        {
+            "error_index": a.error_index,
+            "status": a.status,
+            "updated_at": a.updated_at.isoformat() if a.updated_at else None,
+        }
+        for a in actions
+    ]
+
+
+@router.put("/{report_id}/rules/{rule_idx}/errors/{error_idx}/action")
+async def set_error_action(
+    report_id: str,
+    rule_idx: int,
+    error_idx: int,
+    body: SetActionRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if body.status not in ("sin_accion", "en_revision", "solucionado"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    result = await session.execute(
+        select(ErrorAction).where(
+            ErrorAction.report_id == report_id,
+            ErrorAction.rule_index == rule_idx,
+            ErrorAction.error_index == error_idx,
+        )
+    )
+    existing = result.scalar_one_or_none()
+    if existing:
+        existing.status = body.status
+        existing.updated_at = datetime.utcnow()
+    else:
+        action = ErrorAction(
+            report_id=report_id,
+            rule_index=rule_idx,
+            error_index=error_idx,
+            status=body.status,
+        )
+        session.add(action)
+    await session.commit()
+    return {"status": body.status}
+
+
 @router.get("/{report_id}/export/excel")
 async def export_report_excel(
     report_id: str,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(Report).where(Report.id == report_id, Report.user_id == user.id)
-    )
-    report = result.scalar_one_or_none()
+    if user.role == "admin":
+        base_q = select(Report).where(Report.id == report_id)
+    else:
+        subq = select(GroupPermission.group_id).where(GroupPermission.user_id == user.id)
+        base_q = (
+            select(Report)
+            .options(joinedload(Report.project))
+            .where(
+                Report.id == report_id,
+                or_(
+                    Report.user_id == user.id,
+                    Report.project.has(Project.group_id.in_(subq)),
+                )
+            )
+        )
+    result = await session.execute(base_q)
+    report = result.unique().scalar_one_or_none()
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 
@@ -301,10 +404,23 @@ async def export_report_pdf(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(Report).where(Report.id == report_id, Report.user_id == user.id)
-    )
-    report = result.scalar_one_or_none()
+    if user.role == "admin":
+        base_q = select(Report).where(Report.id == report_id)
+    else:
+        subq = select(GroupPermission.group_id).where(GroupPermission.user_id == user.id)
+        base_q = (
+            select(Report)
+            .options(joinedload(Report.project))
+            .where(
+                Report.id == report_id,
+                or_(
+                    Report.user_id == user.id,
+                    Report.project.has(Project.group_id.in_(subq)),
+                )
+            )
+        )
+    result = await session.execute(base_q)
+    report = result.unique().scalar_one_or_none()
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 

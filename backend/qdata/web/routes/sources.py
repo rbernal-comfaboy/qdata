@@ -9,6 +9,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from qdata.auth.dependencies import get_current_user
+from qdata.auth.permissions import require_role
 from qdata.core.loader import load_data
 from qdata.db.models import Source, DataSource, User
 from qdata.db.session import get_session
@@ -249,12 +250,10 @@ async def update_source(
 @router.delete("/{source_id}")
 async def delete_source(
     source_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(["admin"])),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(Source).where(Source.id == source_id, Source.user_id == user.id)
-    )
+    result = await session.execute(select(Source).where(Source.id == source_id))
     s = result.scalar_one_or_none()
     if not s:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -357,9 +356,15 @@ async def preview_source(
         total = s.row_limit
 
     head = df.head(min(20, len(df)))
+    try:
+        rows_data = json.loads(head.to_json(orient="values"))
+    except (OverflowError, ValueError):
+        rows_data = []
+        for _, row in head.iterrows():
+            rows_data.append([_safe_val(v) for v in row])
     preview = {
         "columns": [str(c) for c in df.columns],
-        "rows": json.loads(head.to_json(orient="values")),
+        "rows": rows_data,
         "total_rows": total,
     }
     s.preview_data = preview
@@ -383,9 +388,15 @@ async def _preview_data(s: Source) -> dict | None:
             if s.selected_columns:
                 df = df[[c for c in s.selected_columns if c in df.columns]]
             head = df.head(10)
+            try:
+                rows_data = json.loads(head.to_json(orient="values"))
+            except (OverflowError, ValueError):
+                rows_data = []
+                for _, row in head.iterrows():
+                    rows_data.append([_safe_val(v) for v in row])
             preview = {
                 "columns": [str(c) for c in df.columns],
-                "rows": json.loads(head.to_json(orient="values")),
+                "rows": rows_data,
                 "total_rows": len(df),
             }
             s.preview_data = preview

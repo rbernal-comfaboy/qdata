@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from qdata.auth.dependencies import get_current_user
+from qdata.auth.permissions import require_role
 from qdata.core.engine import RULE_REGISTRY, RULE_GROUPS, SIMILARITY_LEVELS
 from qdata.db.models import CustomRule, RuleGroup, User
 from qdata.db.session import get_session
@@ -264,16 +265,12 @@ async def list_custom_rules(
 @router.delete("/custom/{rule_id}")
 async def delete_custom_rule(
     rule_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(["admin"])),
     session: AsyncSession = Depends(get_session),
 ):
-    from sqlalchemy.dialects.postgresql import UUID as PG_UUID
     import uuid
     result = await session.execute(
-        select(CustomRule).where(
-            CustomRule.id == uuid.UUID(rule_id),
-            CustomRule.user_id == user.id,
-        )
+        select(CustomRule).where(CustomRule.id == uuid.UUID(rule_id))
     )
     rule = result.scalar_one_or_none()
     if not rule:
@@ -353,15 +350,12 @@ async def update_user_group(
 @router.delete("/groups/manage/{group_id}")
 async def delete_user_group(
     group_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(["admin"])),
     session: AsyncSession = Depends(get_session),
 ):
     import uuid
     result = await session.execute(
-        select(RuleGroup).where(
-            RuleGroup.id == uuid.UUID(group_id),
-            RuleGroup.user_id == user.id,
-        )
+        select(RuleGroup).where(RuleGroup.id == uuid.UUID(group_id))
     )
     g = result.scalar_one_or_none()
     if not g:

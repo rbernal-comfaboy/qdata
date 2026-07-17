@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, Boolean, JSON, Float
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, Boolean, JSON, Float, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import relationship
 
@@ -25,6 +25,7 @@ class User(Base):
     custom_rules = relationship("CustomRule", back_populates="user", cascade="all, delete-orphan")
     rule_groups = relationship("RuleGroup", back_populates="user", cascade="all, delete-orphan")
     analysis_groups = relationship("AnalysisGroup", back_populates="user", cascade="all, delete-orphan")
+    group_permissions = relationship("GroupPermission", back_populates="user", cascade="all, delete-orphan")
 
 
 class Project(Base):
@@ -148,6 +149,33 @@ class AnalysisGroup(Base):
 
     user = relationship("User", back_populates="analysis_groups")
     projects = relationship("Project", back_populates="group", cascade="all, delete-orphan")
+
+
+class GroupPermission(Base):
+    __tablename__ = "group_permissions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    group_id = Column(UUID(as_uuid=True), ForeignKey("analysis_groups.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    user = relationship("User", back_populates="group_permissions")
+    group = relationship("AnalysisGroup", backref="group_permissions")
+
+    __table_args__ = (UniqueConstraint("user_id", "group_id", name="uq_user_group_permission"),)
+
+
+class ErrorAction(Base):
+    __tablename__ = "error_actions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    report_id = Column(UUID(as_uuid=True), ForeignKey("reports.id", ondelete="CASCADE"), nullable=False)
+    rule_index = Column(Integer, nullable=False)
+    error_index = Column(Integer, nullable=False)
+    status = Column(String(20), nullable=False, default="sin_accion")
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("report_id", "rule_index", "error_index", name="uq_error_action"),)
 
 
 class DataSource(Base):

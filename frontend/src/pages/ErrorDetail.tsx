@@ -1,13 +1,20 @@
 ﻿import { useState, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, AlertTriangle, Search, Wrench, Lightbulb,
   Database, Copy, Users, ExternalLink, ChevronLeft, ChevronRight,
+  Circle, Clock, CheckCircle2,
 } from 'lucide-react'
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
 import { describeError } from '../lib/ruleDescriptions'
+
+const STATUS_OPTIONS = [
+  { value: 'sin_accion', label: 'Sin acción', icon: Circle, color: 'text-muted' },
+  { value: 'en_revision', label: 'En revisión', icon: Clock, color: 'text-yellow-400' },
+  { value: 'solucionado', label: 'Solucionado', icon: CheckCircle2, color: 'text-green-400' },
+] as const
 
 const severityColors: Record<string, string> = {
   error: 'text-red-400', warning: 'text-yellow-400', info: 'text-blue-400',
@@ -106,6 +113,26 @@ export default function ErrorDetail() {
     enabled: !!reportId,
   })
 
+  const { data: actions = [] } = useQuery({
+    queryKey: ['rule-actions', reportId, ruleIdx],
+    queryFn: () => api.get(`/reports/${reportId}/rules/${ruleIdx}/actions`).then(r => r.data),
+    enabled: !!reportId,
+  })
+
+  const queryClient = useQueryClient()
+
+  const actionMutation = useMutation({
+    mutationFn: (status: string) =>
+      api.put(`/reports/${reportId}/rules/${ruleIdx}/errors/${errorIdx}/action`, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rule-actions', reportId, ruleIdx] })
+    },
+  })
+
+  const currentAction = actions.find((a: any) => a.error_index === ei)
+  const currentStatus = currentAction?.status || 'sin_accion'
+  const StatusIcon = STATUS_OPTIONS.find(s => s.value === currentStatus)?.icon || Circle
+
   if (isLoading) return <div className="space-y-6"><div className="skeleton h-32 rounded-xl" /><div className="skeleton h-96 rounded-xl" /></div>
 
   const rules = report?.result?.results || []
@@ -172,7 +199,19 @@ export default function ErrorDetail() {
               <p className="text-muted text-sm mt-1">Error #{ei + 1} de {failures.length}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <StatusIcon className={`w-4 h-4 ${STATUS_OPTIONS.find(s => s.value === currentStatus)?.color}`} />
+              <select
+                value={currentStatus}
+                onChange={(e) => actionMutation.mutate(e.target.value)}
+                className="bg-white/10 border border-white/10 rounded text-xs text-white px-2 py-1 appearance-none cursor-pointer hover:bg-white/20 transition-colors"
+              >
+                {STATUS_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value} className="bg-gray-900">{opt.label}</option>
+                ))}
+              </select>
+            </div>
             <button
               onClick={() => navigate(`/reports/${reportId}/rules/${ruleIdx}/errors/${Math.max(0, ei - 1)}`)}
               disabled={ei === 0}

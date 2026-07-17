@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  BookOpen, Plus, Trash2, X, AlertCircle, Database, Loader2, Eye, ListChecks,
+  BookOpen, Plus, Trash2, X, AlertCircle, Database, Loader2, Eye, ListChecks, Copy,
 } from 'lucide-react'
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
@@ -95,6 +95,10 @@ export default function SourcesPage() {
                   <button onClick={() => navigate(`/datasources/${s.id}/edit`)}
                     className="btn-ghost p-1.5" title="Editar">
                     <Eye className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => navigate(`/datasources/new?duplicate=${s.id}`)}
+                    className="btn-ghost p-1.5" title="Duplicar">
+                    <Copy className="w-3.5 h-3.5" />
                   </button>
                   <button onClick={() => setConfirmDelete(s.id)} className="btn-ghost p-1.5 text-red-400" title="Eliminar">
                     <Trash2 className="w-3.5 h-3.5" />

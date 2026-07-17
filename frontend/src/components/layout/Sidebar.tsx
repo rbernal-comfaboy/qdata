@@ -13,6 +13,7 @@ import {
   Sun,
   Moon,
   FolderTree,
+  Users,
 } from 'lucide-react'
 import { useAuthStore } from '../../hooks/useAuth'
 import { useTheme } from '../../hooks/useTheme'
@@ -59,6 +60,17 @@ export default function Sidebar() {
             {link.label}
           </NavLink>
         ))}
+        {user?.role === 'admin' && (
+          <NavLink
+            to="/admin/users"
+            className={({ isActive }) =>
+              cn('sidebar-link', isActive && 'active')
+            }
+          >
+            <Users className="w-5 h-5" />
+            Usuarios
+          </NavLink>
+        )}
       </nav>
 
       <div className="p-4 border-t border-white/10 space-y-2">

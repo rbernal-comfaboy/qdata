@@ -9,6 +9,7 @@ import {
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
 import { formatDate } from '../lib/utils'
+import { useAuthStore } from '../hooks/useAuth'
 
 const GROUP_LABELS: Record<string, string> = {
   basico: 'Básico', formato: 'Formato y validación', fechas: 'Fechas',
@@ -20,6 +21,8 @@ export default function ProcessDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const currentUser = useAuthStore((s) => s.user)
+  const isAdmin = currentUser?.role === 'admin'
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [showScheduleForm, setShowScheduleForm] = useState(false)
@@ -306,11 +309,13 @@ export default function ProcessDetail() {
                 <Play className="w-4 h-4" />
                 {rerunMutation.isPending ? 'Ejecutando...' : 'Ejecutar ahora'}
               </button>
-              <button onClick={() => setConfirmDelete(true)}
-                className="btn-ghost flex items-center gap-2 text-sm text-red-400">
-                <Trash2 className="w-4 h-4" />
-                Eliminar
-              </button>
+              {isAdmin && (
+                <button onClick={() => setConfirmDelete(true)}
+                  className="btn-ghost flex items-center gap-2 text-sm text-red-400">
+                  <Trash2 className="w-4 h-4" />
+                  Eliminar
+                </button>
+              )}
             </>
           ) : isPaused ? (
             <>

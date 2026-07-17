@@ -7,10 +7,13 @@ import {
 } from 'lucide-react'
 import api from '../api/client'
 import { formatDate, getScoreColor } from '../lib/utils'
+import { useAuthStore } from '../hooks/useAuth'
 
 export default function Processes() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const currentUser = useAuthStore((s) => s.user)
+  const isAdmin = currentUser?.role === 'admin'
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [searchParams] = useSearchParams()
   const groupId = searchParams.get('groupId')
@@ -134,7 +137,7 @@ export default function Processes() {
                         <Link to={`/processes/${p.id}`} className="p-1.5 hover:bg-white/10 rounded-lg transition-colors text-muted hover:text-white" title="Ver detalle">
                           <ExternalLink className="w-4 h-4" />
                         </Link>
-                        {confirmDelete === p.id ? (
+                        {isAdmin && (confirmDelete === p.id ? (
                           <div className="inline-flex items-center gap-1 bg-red-500/20 border border-red-500/30 rounded-lg px-2 py-1">
                             <AlertTriangle className="w-3 h-3 text-red-400" />
                             <button onClick={() => deleteMutation.mutate(p.id)} disabled={deleteMutation.isPending}
@@ -145,7 +148,7 @@ export default function Processes() {
                               No
                             </button>
                           </div>
-                        ) : (
+                        ) : isAdmin ? (
                           <button
                             onClick={() => setConfirmDelete(p.id)}
                             className="p-1.5 hover:bg-red-500/20 rounded-lg transition-colors text-muted hover:text-red-400"
@@ -153,7 +156,7 @@ export default function Processes() {
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
-                        )}
+                        ) : null)}
                       </div>
                     </td>
                   </tr>

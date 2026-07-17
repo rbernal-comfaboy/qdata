@@ -9,6 +9,7 @@ import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
 import QualityGauge from '../components/charts/QualityGauge'
 import { formatDate, getScoreLabel } from '../lib/utils'
+import { useAuthStore } from '../hooks/useAuth'
 
 const severityIcons: Record<string, any> = {
   error: XCircle,
@@ -26,6 +27,8 @@ export default function ReportDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const currentUser = useAuthStore((s) => s.user)
+  const isAdmin = currentUser?.role === 'admin'
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   const { data: report, isLoading } = useQuery({
@@ -103,7 +106,7 @@ export default function ReportDetail() {
           Volver a reportes
         </Link>
         <div className="flex items-center gap-2">
-          {confirmDelete ? (
+          {isAdmin && (confirmDelete ? (
             <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/30 rounded-xl px-3 py-1.5">
               <AlertTriangle className="w-4 h-4 text-red-400" />
               <span className="text-sm text-red-300">¿Eliminar?</span>
@@ -120,7 +123,7 @@ export default function ReportDetail() {
               <Trash2 className="w-4 h-4" />
               Eliminar
             </button>
-          )}
+          ))}
           <button onClick={handleExportPdf} className="btn-ghost flex items-center gap-2 text-sm">
             <FileText className="w-4 h-4" />
             PDF

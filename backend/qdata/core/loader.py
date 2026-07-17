@@ -18,6 +18,8 @@ def _apply_limit(sql: str, limit: int, source_type: str = "") -> str:
     if upper.startswith("SELECT"):
         if source_type == "sqlserver":
             return f"SELECT TOP {limit} * FROM ({sql}) AS _limited_"
+        if source_type == "oracle":
+            return f"SELECT * FROM ({sql}) WHERE ROWNUM <= {limit}"
         return f"SELECT * FROM ({sql}) AS _limited_ LIMIT {limit}"
     return sql
 

@@ -1,12 +1,15 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from qdata.auth.dependencies import get_current_user
 from qdata.auth.jwt import create_access_token, hash_password
 from qdata.auth.permissions import require_permission
-from qdata.db.models import User
+from qdata.db.models import AnalysisGroup, GroupPermission, User
 from qdata.db.session import get_session
 
 router = APIRouter()
@@ -31,6 +34,16 @@ class CreateUserRequest(BaseModel):
     password: str
     name: str = ""
     role: str = "analyst"
+    group_ids: list[str] = []
+
+
+class GroupPermissionOut(BaseModel):
+    group_id: str
+    group_name: str
+
+
+class SetPermissionsRequest(BaseModel):
+    group_ids: list[str]
 
 
 @router.get("/users")
@@ -95,6 +108,12 @@ async def create_user(
     await session.commit()
     await session.refresh(new_user)
 
+    if req.group_ids:
+        for gid in req.group_ids:
+            gp = GroupPermission(user_id=new_user.id, group_id=UUID(gid))
+            session.add(gp)
+        await session.commit()
+
     return UserOut(
         id=str(new_user.id),
         email=new_user.email,
@@ -119,5 +138,56 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="User not found")
 
     await session.delete(target)
+    await session.commit()
+    return {"status": "ok"}
+
+
+@router.get("/groups")
+async def list_all_groups(
+    user: User = Depends(require_permission("manage:users")),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(AnalysisGroup).order_by(AnalysisGroup.name))
+    groups = result.scalars().all()
+    return [{"id": str(g.id), "name": g.name} for g in groups]
+
+
+@router.get("/users/{user_id}/permissions")
+async def get_user_permissions(
+    user_id: str,
+    user: User = Depends(require_permission("manage:users")),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(GroupPermission)
+        .options(selectinload(GroupPermission.group))
+        .where(GroupPermission.user_id == user_id)
+    )
+    perms = result.scalars().all()
+    return [
+        GroupPermissionOut(group_id=str(p.group_id), group_name=p.group.name or "")
+        for p in perms
+    ]
+
+
+@router.put("/users/{user_id}/permissions")
+async def set_user_permissions(
+    user_id: str,
+    req: SetPermissionsRequest,
+    user: User = Depends(require_permission("manage:users")),
+    session: AsyncSession = Depends(get_session),
+):
+    target = await session.execute(select(User).where(User.id == user_id))
+    if not target.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="User not found")
+
+    await session.execute(
+        sa_delete(GroupPermission).where(GroupPermission.user_id == user_id)
+    )
+
+    for gid in req.group_ids:
+        gp = GroupPermission(user_id=UUID(user_id), group_id=UUID(gid))
+        session.add(gp)
+
     await session.commit()
     return {"status": "ok"}

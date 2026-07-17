@@ -1,13 +1,19 @@
 import { useState, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, CheckCircle, XCircle, AlertTriangle, Info,
-  ChevronLeft, ChevronRight, ExternalLink, Search,
+  ArrowLeft, CheckCircle, XCircle, AlertTriangle, Info, CheckCircle2,
+  ChevronLeft, ChevronRight, ExternalLink, Search, Circle, Clock,
 } from 'lucide-react'
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
 import { describeError, describeDetail } from '../lib/ruleDescriptions'
+
+const STATUS_OPTIONS = [
+  { value: 'sin_accion', label: 'Sin acción', icon: Circle, color: 'text-muted' },
+  { value: 'en_revision', label: 'En revisión', icon: Clock, color: 'text-yellow-400' },
+  { value: 'solucionado', label: 'Solucionado', icon: CheckCircle2, color: 'text-green-400' },
+] as const
 
 const severityIcons: Record<string, any> = {
   error: XCircle,
@@ -92,6 +98,24 @@ export default function RuleDetail() {
     enabled: !!reportId,
   })
 
+  const { data: actions = [] } = useQuery({
+    queryKey: ['rule-actions', reportId, ruleIdx],
+    queryFn: () => api.get(`/reports/${reportId}/rules/${ruleIdx}/actions`).then(r => r.data),
+    enabled: !!reportId,
+  })
+
+  const resolvedCount = actions.filter((a: any) => a.status === 'solucionado').length
+
+  const queryClient = useQueryClient()
+
+  const actionMutation = useMutation({
+    mutationFn: ({ errorIdx, status }: { errorIdx: number; status: string }) =>
+      api.put(`/reports/${reportId}/rules/${ruleIdx}/errors/${errorIdx}/action`, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rule-actions', reportId, ruleIdx] })
+    },
+  })
+
   if (isLoading) {
     return (
       <div className="space-y-6">
@@ -169,6 +193,12 @@ export default function RuleDetail() {
               <span className={`text-sm font-medium ${rule.passed ? 'text-green-400' : 'text-red-400'}`}>
                 {rule.passed ? 'Aprobado' : 'Fallos: ' + rule.failed + '/' + rule.total + ' (' + (rule.failure_pct ?? 0).toFixed(2) + '%)'}
               </span>
+              {resolvedCount > 0 && (
+                <span className="inline-flex items-center gap-1 text-xs text-green-400 bg-green-500/10 px-2 py-0.5 rounded-full">
+                  <CheckCircle2 className="w-3 h-3" />
+                  {resolvedCount} solucionado{resolvedCount !== 1 ? 's' : ''}
+                </span>
+              )}
             </div>
             <p className="text-muted mt-2">{rule.description}</p>
             {rule.recommendation && (
@@ -297,6 +327,7 @@ export default function RuleDetail() {
                     <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Valor</th>
                     <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Descripción del error</th>
                     <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Sugerencia</th>
+                    <th className="text-left p-2 text-muted font-medium whitespace-nowrap">Estado</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -312,6 +343,31 @@ export default function RuleDetail() {
                         <td className="p-2 text-white max-w-xs truncate font-mono text-xs">{info.valor ?? '—'}</td>
                         <td className="p-2 text-white">{info.descripcion}</td>
                         <td className="p-2 text-yellow-400 text-xs max-w-sm">{info.sugerencia}</td>
+                        <td className="p-2" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-1">
+                            {(() => {
+                              const act = actions.find((a: any) => a.error_index === globalIdx)
+                              const st = act?.status || 'sin_accion'
+                              const opt = STATUS_OPTIONS.find(o => o.value === st)
+                              const Icon = opt?.icon || Circle
+                              return (
+                                <>
+                                  <Icon className={`w-3 h-3 ${opt?.color}`} />
+                                  <select
+                                    value={st}
+                                    onChange={(e) => actionMutation.mutate({ errorIdx: globalIdx, status: e.target.value })}
+                                    className="bg-transparent border border-white/10 rounded text-xs text-white px-1 py-0.5 appearance-none cursor-pointer hover:bg-white/10 transition-colors max-w-[7rem]"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {STATUS_OPTIONS.map(sopt => (
+                                      <option key={sopt.value} value={sopt.value} className="bg-gray-900">{sopt.label}</option>
+                                    ))}
+                                  </select>
+                                </>
+                              )
+                            })()}
+                          </div>
+                        </td>
                       </tr>
                     )
                   })}

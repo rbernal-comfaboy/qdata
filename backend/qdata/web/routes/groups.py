@@ -3,12 +3,13 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from qdata.db.models import AnalysisGroup, Project, Report
+from qdata.db.models import AnalysisGroup, GroupPermission, Project, Report
 from qdata.db.session import get_session
 from qdata.auth.dependencies import get_current_user
+from qdata.auth.permissions import require_role
 
 router = APIRouter(prefix="/groups", tags=["groups"])
 
@@ -30,8 +31,15 @@ async def list_groups(
     user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    if user.role == "admin":
+        base_q = select(AnalysisGroup)
+    else:
+        subq = select(GroupPermission.group_id).where(GroupPermission.user_id == user.id)
+        base_q = select(AnalysisGroup).where(
+            or_(AnalysisGroup.user_id == user.id, AnalysisGroup.id.in_(subq))
+        )
     result = await session.execute(
-        select(AnalysisGroup).where(AnalysisGroup.user_id == user.id).order_by(AnalysisGroup.created_at.desc())
+        base_q.order_by(AnalysisGroup.created_at.desc())
     )
     groups = result.scalars().all()
 
@@ -52,6 +60,23 @@ async def list_groups(
         )
         last = last_report.scalar()
 
+        avg = await session.execute(
+            select(func.avg(Report.score)).join(Project).where(Project.group_id == g.id)
+        )
+        avg_val = avg.scalar()
+        avg_score = round(avg_val, 2) if avg_val is not None else None
+        if avg_score is not None:
+            if avg_score >= 90:
+                score_label = "excelente"
+            elif avg_score >= 70:
+                score_label = "aceptable"
+            elif avg_score >= 50:
+                score_label = "deficiente"
+            else:
+                score_label = "critico"
+        else:
+            score_label = None
+
         out.append({
             "id": str(g.id),
             "name": g.name,
@@ -61,6 +86,8 @@ async def list_groups(
             "report_count": rcount,
             "last_analysis": last.isoformat() if last else None,
             "created_at": g.created_at.isoformat() if g.created_at else None,
+            "avg_score": avg_score,
+            "score_label": score_label,
         })
     return out
 
@@ -82,11 +109,11 @@ async def create_group(
 async def update_group(
     group_id: UUID,
     body: GroupUpdate,
-    user=Depends(get_current_user),
+    user=Depends(require_role(["admin"])),
     session: AsyncSession = Depends(get_session),
 ):
     result = await session.execute(
-        select(AnalysisGroup).where(AnalysisGroup.id == group_id, AnalysisGroup.user_id == user.id)
+        select(AnalysisGroup).where(AnalysisGroup.id == group_id)
     )
     g = result.scalar_one_or_none()
     if not g:
@@ -104,11 +131,11 @@ async def update_group(
 @router.delete("/{group_id}")
 async def delete_group(
     group_id: UUID,
-    user=Depends(get_current_user),
+    user=Depends(require_role(["admin"])),
     session: AsyncSession = Depends(get_session),
 ):
     result = await session.execute(
-        select(AnalysisGroup).where(AnalysisGroup.id == group_id, AnalysisGroup.user_id == user.id)
+        select(AnalysisGroup).where(AnalysisGroup.id == group_id)
     )
     g = result.scalar_one_or_none()
     if not g:
@@ -124,9 +151,15 @@ async def group_dashboard(
     user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(AnalysisGroup).where(AnalysisGroup.id == group_id, AnalysisGroup.user_id == user.id)
-    )
+    if user.role == "admin":
+        base_q = select(AnalysisGroup).where(AnalysisGroup.id == group_id)
+    else:
+        subq = select(GroupPermission.group_id).where(GroupPermission.user_id == user.id)
+        base_q = select(AnalysisGroup).where(
+            AnalysisGroup.id == group_id,
+            or_(AnalysisGroup.user_id == user.id, AnalysisGroup.id.in_(subq))
+        )
+    result = await session.execute(base_q)
     g = result.scalar_one_or_none()
     if not g:
         raise HTTPException(404, "Grupo no encontrado")

@@ -9,6 +9,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     "viewer": {"view:report"},
 }
 
+MUTABLE_ROLES = ("admin",)
+
 
 def require_permission(permission: str):
     async def check(user: User = Depends(get_current_user)) -> User:
@@ -17,6 +19,17 @@ def require_permission(permission: str):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Permission denied: {permission}",
+            )
+        return user
+    return check
+
+
+def require_role(allowed_roles: list[str]):
+    async def check(user: User = Depends(get_current_user)) -> User:
+        if user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Acción no permitida para este rol",
             )
         return user
     return check

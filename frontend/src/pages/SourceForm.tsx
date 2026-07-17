@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   Save, X, AlertCircle, Database, Loader2,
   Search, Code2, Table2, Lightbulb, Clock, ToggleLeft, ToggleRight, AlertTriangle,
@@ -24,6 +24,8 @@ export default function SourceForm() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { id } = useParams()
+  const [searchParams] = useSearchParams()
+  const duplicateId = searchParams.get('duplicate')
   const isEdit = !!id
 
   const [name, setName] = useState('')
@@ -75,10 +77,60 @@ export default function SourceForm() {
     enabled: isEdit,
   })
 
+  const { data: duplicateData } = useQuery({
+    queryKey: ['source', duplicateId],
+    queryFn: () => api.get(`/sources/${duplicateId}`).then(r => r.data),
+    enabled: !!duplicateId,
+  })
+
   const { data: connections } = useQuery({
     queryKey: ['datasources'],
     queryFn: () => api.get('/datasources').then(r => r.data),
   })
+
+  useEffect(() => {
+    if (duplicateData) {
+      setName(`Copia de ${duplicateData.name}`)
+      setDsId(duplicateData.data_source_id)
+      setQuery(duplicateData.query || '')
+      setSelectedColumns(duplicateData.selected_columns || [])
+      setRowLimit(duplicateData.row_limit)
+      setStorageMode(duplicateData.storage_mode || 'connection')
+      setRefreshCron(duplicateData.refresh_cron || '')
+      setCronEnabled(!!duplicateData.refresh_cron)
+      const initialMode = duplicateData.query && !duplicateData.selected_columns?.length ? 'sql' : 'visual'
+      setMode(initialMode)
+      setTableActiveTab(initialMode)
+      if (duplicateData.preview_data) setFormPreview(duplicateData.preview_data)
+      if (duplicateData.refresh_cron) {
+        const parts = (duplicateData.refresh_cron || '').split(/\s+/)
+        if (parts.length >= 5 && !duplicateData.refresh_cron.includes('1-5')) {
+          const sec = parts[0], min = parts[1], hour = parts[2], day = parts[3], month = parts[4], wday = parts[5] || '*'
+          if (sec === '0' && hour !== '*' && min !== '*') {
+            if (hour === '*' && min === '0') { setCronFreq('hourly') }
+            else if (day === '*' && month === '*' && wday === '*') { setCronFreq('daily'); setCronHour(hour); setCronMinute(min) }
+            else if (day === '*' && month === '*' && wday !== '*') { setCronFreq('weekly'); setCronHour(hour); setCronMinute(min); if (wday !== '*') setCronWeekday(wday) }
+            else if (day !== '*' && month === '*') { setCronFreq('monthly'); setCronHour(hour); setCronMinute(min); setCronMonthDay(day) }
+          } else if (sec === '0' && hour === '*' && min.startsWith('*/')) {
+            setCronFreq('minutes'); setCronInterval(min.replace('*/', ''))
+          }
+        }
+      }
+      if (initialMode === 'visual') {
+        const q = (duplicateData.query || '').trim()
+        const fromMatch = q.match(/\bFROM\s+([^\s;]+)/i)
+        if (fromMatch && duplicateData.selected_columns?.length) {
+          const tableName = fromMatch[1].replace(/[\[\]`"]/g, '')
+          setSelectedTable(tableName)
+          setColumnsLoading(true)
+          api.get(`/datasources/${duplicateData.data_source_id}/tables/${encodeURIComponent(tableName)}/columns`).then(r => {
+            setTableColumns(r.data.columns || [])
+            setSelectedColumns(duplicateData.selected_columns || [])
+          }).catch(() => setTableColumns([])).finally(() => setColumnsLoading(false))
+        }
+      }
+    }
+  }, [duplicateData])
 
   useEffect(() => {
     if (sourceData) {
@@ -281,7 +333,6 @@ export default function SourceForm() {
     }
 
     advance()
-    await new Promise(r => setTimeout(r, 100))
 
     const payload: any = {
       name, data_source_id: dsId,
@@ -293,7 +344,6 @@ export default function SourceForm() {
     }
     try {
       advance()
-      await new Promise(r => setTimeout(r, 200))
       if (isEdit) {
         await api.put(`/sources/${id}`, { name, data_source_id: dsId, query: payload.query, selected_columns: selectedColumns, row_limit: rowLimit, storage_mode: storageMode, refresh_cron: payload.refresh_cron })
       } else {
@@ -301,16 +351,12 @@ export default function SourceForm() {
       }
       if (storageMode === 'memory') {
         advance()
-        await new Promise(r => setTimeout(r, 300))
         advance()
-        await new Promise(r => setTimeout(r, 400))
       }
       if (cronEnabled && storageMode === 'memory') {
         advance()
-        await new Promise(r => setTimeout(r, 200))
       }
       advance()
-      await new Promise(r => setTimeout(r, 300))
       queryClient.invalidateQueries({ queryKey: ['sources'] })
       navigate('/datasources')
     } catch (e: any) {
@@ -323,8 +369,8 @@ export default function SourceForm() {
     <div>
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-3xl font-bold">{isEdit ? 'Editar Fuente' : 'Nueva Fuente de Datos'}</h1>
-          <p className="text-sm text-muted mt-1">{isEdit ? 'Modifica la configuración de la fuente' : 'Configura una nueva fuente de datos para analizar'}</p>
+          <h1 className="text-3xl font-bold">{isEdit ? 'Editar Fuente' : duplicateId ? 'Duplicar Fuente' : 'Nueva Fuente de Datos'}</h1>
+          <p className="text-sm text-muted mt-1">{isEdit ? 'Modifica la configuración de la fuente' : duplicateId ? 'Crea una copia de la fuente con nuevos parámetros' : 'Configura una nueva fuente de datos para analizar'}</p>
         </div>
       </div>
 

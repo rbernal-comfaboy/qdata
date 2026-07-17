@@ -4,9 +4,12 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { FileText, Trash2, AlertTriangle, Database, FileSpreadsheet } from 'lucide-react'
 import api from '../api/client'
 import { formatDate, getScoreColor } from '../lib/utils'
+import { useAuthStore } from '../hooks/useAuth'
 
 export default function Reports() {
   const queryClient = useQueryClient()
+  const currentUser = useAuthStore((s) => s.user)
+  const isAdmin = currentUser?.role === 'admin'
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [searchParams] = useSearchParams()
   const groupId = searchParams.get('groupId')
@@ -93,7 +96,7 @@ export default function Reports() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    {deletingId === r.id ? (
+                    {isAdmin && (deletingId === r.id ? (
                       <div className="inline-flex items-center gap-1 bg-red-500/20 border border-red-500/30 rounded-lg px-2 py-1">
                         <AlertTriangle className="w-3 h-3 text-red-400" />
                         <span className="text-xs text-red-300">¿Eliminar?</span>
@@ -105,13 +108,13 @@ export default function Reports() {
                           No
                         </button>
                       </div>
-                    ) : (
+                    ) : isAdmin ? (
                       <button onClick={() => setDeletingId(r.id)}
                         className="p-1.5 hover:bg-red-500/20 rounded-lg transition-colors text-muted hover:text-red-400"
                         title="Eliminar reporte">
                         <Trash2 className="w-4 h-4" />
                       </button>
-                    )}
+                    ) : null)}
                   </td>
                 </tr>
               ))}

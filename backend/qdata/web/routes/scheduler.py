@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from qdata.auth.dependencies import get_current_user
+from qdata.auth.permissions import require_role
 from qdata.db.models import Project, ScheduledTask, TaskHistory, User
 from qdata.db.session import get_session
 from qdata.scheduler.service import (
@@ -97,12 +98,10 @@ async def list_tasks(
 
 @router.delete("/tasks")
 async def delete_all_tasks(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(["admin"])),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(ScheduledTask).where(ScheduledTask.user_id == user.id)
-    )
+    result = await session.execute(select(ScheduledTask))
     tasks = result.scalars().all()
     for task in tasks:
         await remove_scheduled_task(str(task.id))
@@ -114,12 +113,10 @@ async def delete_all_tasks(
 @router.delete("/tasks/{task_id}")
 async def delete_task(
     task_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(["admin"])),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(ScheduledTask).where(ScheduledTask.id == task_id, ScheduledTask.user_id == user.id)
-    )
+    result = await session.execute(select(ScheduledTask).where(ScheduledTask.id == task_id))
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")

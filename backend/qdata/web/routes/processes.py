@@ -2,12 +2,13 @@ import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, delete, desc
+from sqlalchemy import select, desc, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from qdata.auth.dependencies import get_current_user
+from qdata.auth.permissions import require_role
 from qdata.core.loader import load_data
-from qdata.db.models import Project, Report, ScheduledTask, User
+from qdata.db.models import GroupPermission, Project, Report, ScheduledTask, User
 from qdata.db.session import async_session_factory, get_session
 from qdata.web.routes.analyze import run_analysis_background
 
@@ -21,6 +22,7 @@ class UpdateProcessRequest(BaseModel):
 
 
 @router.get("/")
+@router.get("")
 async def list_processes(
     group_id: str | None = None,
     user: User = Depends(get_current_user),
@@ -55,7 +57,13 @@ async def list_processes(
             connection_label = db_name or cs or fp or None
         return source_label, connection_label
 
-    query = select(Project).where(Project.user_id == user.id)
+    if user.role == "admin":
+        query = select(Project)
+    else:
+        subq = select(GroupPermission.group_id).where(GroupPermission.user_id == user.id)
+        query = select(Project).where(
+            or_(Project.user_id == user.id, Project.group_id.in_(subq))
+        )
     if group_id:
         query = query.where(Project.group_id == group_id)
     result = await session.execute(query.order_by(desc(Project.created_at)))
@@ -104,9 +112,15 @@ async def get_process(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(Project).where(Project.id == process_id, Project.user_id == user.id)
-    )
+    if user.role == "admin":
+        base_q = select(Project).where(Project.id == process_id)
+    else:
+        subq = select(GroupPermission.group_id).where(GroupPermission.user_id == user.id)
+        base_q = select(Project).where(
+            Project.id == process_id,
+            or_(Project.user_id == user.id, Project.group_id.in_(subq))
+        )
+    result = await session.execute(base_q)
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=404, detail="Process not found")
@@ -163,12 +177,10 @@ async def get_process(
 async def update_process(
     process_id: str,
     req: UpdateProcessRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(["admin"])),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(Project).where(Project.id == process_id, Project.user_id == user.id)
-    )
+    result = await session.execute(select(Project).where(Project.id == process_id))
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=404, detail="Process not found")
@@ -187,12 +199,10 @@ async def update_process(
 @router.delete("/{process_id}")
 async def delete_process(
     process_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(["admin"])),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(Project).where(Project.id == process_id, Project.user_id == user.id)
-    )
+    result = await session.execute(select(Project).where(Project.id == process_id))
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=404, detail="Process not found")

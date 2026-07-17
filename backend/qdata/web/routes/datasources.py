@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from qdata.auth.dependencies import get_current_user
+from qdata.auth.permissions import require_role
 from qdata.core.loader import load_data
 from qdata.db.models import DataSource, Source, User
 from qdata.db.session import get_session
@@ -34,8 +35,8 @@ DEFAULT_PORTS = {
 def _detect_sqlserver_driver() -> str:
     """Return the best available ODBC driver name for SQL Server."""
     candidates = [
-        "ODBC Driver 18 for SQL Server",
         "ODBC Driver 17 for SQL Server",
+        "ODBC Driver 18 for SQL Server",
         "SQL Server",
     ]
     try:
@@ -90,13 +91,10 @@ def build_connection_string(source_type: str, fields: dict) -> str:
         instance = fields.get("instance", "")
         port = port or DEFAULT_PORTS["sqlserver"]
         pw = _url_encode(password)
-        driver = _detect_sqlserver_driver()
         if instance:
-            cs = f"mssql+pyodbc://{username}:{pw}@{host}\\{instance}/{database}?driver={driver}"
+            cs = f"mssql+pymssql://{username}:{pw}@{host}\\{instance}/{database}"
         else:
-            cs = f"mssql+pyodbc://{username}:{pw}@{host}:{port}/{database}?driver={driver}"
-        if not ssl:
-            cs += "&TrustServerCertificate=yes"
+            cs = f"mssql+pymssql://{username}:{pw}@{host}:{port}/{database}"
         return cs
     elif source_type == "oracle":
         port = port or DEFAULT_PORTS["oracle"]
@@ -314,12 +312,10 @@ async def update_datasource(
 @router.delete("/{ds_id}")
 async def delete_datasource(
     ds_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(["admin"])),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(DataSource).where(DataSource.id == ds_id, DataSource.user_id == user.id)
-    )
+    result = await session.execute(select(DataSource).where(DataSource.id == ds_id))
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Data source not found")
