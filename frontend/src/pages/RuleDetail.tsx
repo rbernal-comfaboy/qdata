@@ -104,6 +104,7 @@ export default function RuleDetail() {
     enabled: !!reportId,
   })
 
+  const inRevisionCount = actions.filter((a: any) => a.status === 'en_revision').length
   const resolvedCount = actions.filter((a: any) => a.status === 'solucionado').length
 
   const queryClient = useQueryClient()
@@ -193,12 +194,20 @@ export default function RuleDetail() {
               <span className={`text-sm font-medium ${rule.passed ? 'text-green-400' : 'text-red-400'}`}>
                 {rule.passed ? 'Aprobado' : 'Fallos: ' + rule.failed + '/' + rule.total + ' (' + (rule.failure_pct ?? 0).toFixed(2) + '%)'}
               </span>
-              {resolvedCount > 0 && (
-                <span className="inline-flex items-center gap-1 text-xs text-green-400 bg-green-500/10 px-2 py-0.5 rounded-full">
-                  <CheckCircle2 className="w-3 h-3" />
-                  {resolvedCount} solucionado{resolvedCount !== 1 ? 's' : ''}
-                </span>
-              )}
+              <div className="flex items-center gap-1.5">
+                {inRevisionCount > 0 && (
+                  <span className="inline-flex items-center gap-1 text-xs text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded-full">
+                    <Clock className="w-3 h-3" />
+                    {inRevisionCount} en revisión
+                  </span>
+                )}
+                {resolvedCount > 0 && (
+                  <span className="inline-flex items-center gap-1 text-xs text-green-400 bg-green-500/10 px-2 py-0.5 rounded-full">
+                    <CheckCircle2 className="w-3 h-3" />
+                    {resolvedCount} solucionado{resolvedCount !== 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
             </div>
             <p className="text-muted mt-2">{rule.description}</p>
             {rule.recommendation && (

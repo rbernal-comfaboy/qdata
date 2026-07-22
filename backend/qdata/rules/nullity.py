@@ -3,6 +3,11 @@ import pandas as pd
 from qdata.rules.base import Rule, RuleResult
 
 
+def _row_values(df: pd.DataFrame, idx: int) -> dict:
+    row = df.loc[idx]
+    return {col: (v.item() if hasattr(v, 'item') else v) for col, v in row.items()}
+
+
 class NullCheck(Rule):
     name = "null_check"
     description = "Detecta valores nulos y vacíos en todas las columnas"
@@ -85,13 +90,13 @@ class NullCheck(Rule):
             if null_counts[col] > 0:
                 indices = df[df[col].isnull()].index[:500].tolist()
                 for idx in indices:
-                    sample_failures.append({"column": col, "row": int(idx), "value": None})
+                    sample_failures.append({"column": col, "row": int(idx), "value": None, "values": _row_values(df, idx)})
             if empty_counts[col] > 0:
                 empty_mask = df[col].astype(str).str.strip().eq("")
                 empty_indices = df[empty_mask].index[:500].tolist()
                 for idx in empty_indices:
                     if idx not in df[df[col].isnull()].index:
-                        sample_failures.append({"column": col, "row": int(idx), "value": ""})
+                        sample_failures.append({"column": col, "row": int(idx), "value": "", "values": _row_values(df, idx)})
 
         passed = failure_pct <= self.MAX_NULL_PCT
         recommendation = None

@@ -5,6 +5,11 @@ import numpy as np
 from qdata.rules.base import Rule, RuleResult
 
 
+def _row_values(df: pd.DataFrame, idx: int) -> dict:
+    row = df.loc[idx]
+    return {col: (v.item() if hasattr(v, 'item') else v) for col, v in row.items()}
+
+
 class CrossConsistencyCheck(Rule):
     name = "cross_consistency_check"
     description = "Valida relaciones aritméticas y lógicas entre columnas (total = precio × cantidad, edad = año_actual - año_nacimiento)"
@@ -39,7 +44,7 @@ class CrossConsistencyCheck(Rule):
                 failed += n_fail
                 details.append({"rule": label, "failed": n_fail, "total": len(result), "pct": round(n_fail / len(result) * 100, 2)})
                 for idx in result[~result].index:
-                    sample_failures.append({"row": int(idx), "rule": label})
+                    sample_failures.append({"row": int(idx), "rule": label, "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else "Revisar violaciones de consistencia cruzada. Verificar cálculos y relaciones entre columnas"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total or len(df.columns), failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)
@@ -80,7 +85,7 @@ class FunctionalDependencyCheck(Rule):
                 for det_val in violations.index:
                     rows = df[df[det_col] == det_val][[det_col, dep_col]]
                     for _, r in rows.iterrows():
-                        sample_failures.append({"determinant": det_col, "value": str(r[det_col]), "dependent": dep_col, "dep_values": str(r[dep_col])})
+                        sample_failures.append({"determinant": det_col, "value": str(r[det_col]), "dependent": dep_col, "dep_values": str(r[dep_col]), "values": _row_values(df, r.name)})
         passed = failed == 0
         rec = None if passed else "Corregir violaciones de dependencia funcional. Un valor del determinante debe corresponder a un único valor del dependiente"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total, failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)

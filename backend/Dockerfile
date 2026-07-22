@@ -14,7 +14,7 @@ RUN apt-get update && \
         sed 's|deb \[signed-by=/etc/apt/keyrings/microsoft.gpg]|deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg]|' \
         > /etc/apt/sources.list.d/mssql-release.list && \
     apt-get update && \
-    ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 && \
+    ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql17 msodbcsql18 && \
     rm -rf /var/lib/apt/lists/*
 
 RUN apt-get update && \

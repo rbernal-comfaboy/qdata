@@ -5,6 +5,11 @@ import numpy as np
 from qdata.rules.base import Rule, RuleResult
 
 
+def _row_values(df: pd.DataFrame, idx: int) -> dict:
+    row = df.loc[idx]
+    return {col: (v.item() if hasattr(v, 'item') else v) for col, v in row.items()}
+
+
 class VolumeAnomalyCheck(Rule):
     name = "volume_anomaly_check"
     description = "Detecta anomalías en el volumen de filas vs el promedio histórico"
@@ -90,7 +95,7 @@ class MissingFKCheck(Rule):
                     failed += n_fail
                     details.append({"column": fk_col, "orphans": n_fail, "total": len(fk_vals), "pct": round(n_fail / len(fk_vals) * 100, 2)})
                     for idx in fk_vals[orphaned].index:
-                        sample_failures.append({"column": fk_col, "row": int(idx), "value": str(fk_vals.loc[idx])})
+                        sample_failures.append({"column": fk_col, "row": int(idx), "value": str(fk_vals.loc[idx]), "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else f"{failed} valores huérfanos en columnas FK. Verificar integridad referencial"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total, failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)

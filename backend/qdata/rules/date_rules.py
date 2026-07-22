@@ -5,6 +5,11 @@ import pandas as pd
 from qdata.rules.base import Rule, RuleResult
 
 
+def _row_values(df: pd.DataFrame, idx: int) -> dict:
+    row = df.loc[idx]
+    return {col: (v.item() if hasattr(v, 'item') else v) for col, v in row.items()}
+
+
 def _detect_date_cols(df: pd.DataFrame) -> list[str]:
     cols = []
     for col in df.columns:
@@ -45,7 +50,7 @@ class InvalidDateCheck(Rule):
                 invalid_mask = parsed.isna()
                 details.append({"column": col, "failed": n_fail, "total": len(raw), "pct": round(n_fail / len(raw) * 100, 2)})
                 for idx in raw[invalid_mask].index:
-                    sample_failures.append({"column": col, "row": int(idx), "value": str(raw.loc[idx])})
+                    sample_failures.append({"column": col, "row": int(idx), "value": str(raw.loc[idx]), "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else "Corregir fechas mal formadas. Usar formato ISO 8601 (YYYY-MM-DD)"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total, failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)
@@ -73,7 +78,7 @@ class DateRangeCheck(Rule):
                 failed += n_fail
                 details.append({"column": col, "failed": n_fail, "total": len(series), "pct": round(n_fail / len(series) * 100, 2), "before_min": int(too_early.sum()), "after_max": int(too_late.sum())})
                 for idx in comb[comb].index:
-                    sample_failures.append({"column": col, "row": int(idx), "value": str(series.loc[idx])})
+                    sample_failures.append({"column": col, "row": int(idx), "value": str(series.loc[idx]), "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else f"Revisar fechas fuera del rango [{self.min_year}, {self.max_date.date()}]"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total, failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)
@@ -104,7 +109,7 @@ class DateInconsistencyCheck(Rule):
                     failed += n_fail
                     details.append({"column_pair": f"{c1} > {c2}", "failed": n_fail, "total": n_valid, "pct": round(n_fail / n_valid * 100, 2)})
                     for idx in gt[gt].index:
-                        sample_failures.append({"row": int(idx), "col1": c1, "val1": str(s1.loc[idx]), "col2": c2, "val2": str(s2.loc[idx])})
+                        sample_failures.append({"row": int(idx), "col1": c1, "val1": str(s1.loc[idx]), "col2": c2, "val2": str(s2.loc[idx]), "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else "Revisar pares de fechas inconsistentes. Verificar que fechas_initio <= fechas_fin"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total, failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)
@@ -131,7 +136,7 @@ class FreshnessCheck(Rule):
                 failed += n_fail
                 details.append({"column": col, "failed": n_fail, "total": len(series), "pct": round(n_fail / len(series) * 100, 2), "oldest": str(series.min()), "newest": str(series.max())})
                 for idx in old[old].index:
-                    sample_failures.append({"column": col, "row": int(idx), "value": str(series.loc[idx])})
+                    sample_failures.append({"column": col, "row": int(idx), "value": str(series.loc[idx]), "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else f"Datos anteriores a {self.max_days_old} días. Verificar frescura de la fuente"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total or len(df.columns), failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)
@@ -163,7 +168,7 @@ class LatencyCheck(Rule):
         sample_failures = []
         if n_fail:
             for idx in high_latency[high_latency].index:
-                sample_failures.append({"row": int(idx), "event": str(event.loc[idx]), "ingest": str(ingest.loc[idx]), "latency_h": round(float(latency_h.loc[idx]), 2)})
+                sample_failures.append({"row": int(idx), "event": str(event.loc[idx]), "ingest": str(ingest.loc[idx]), "latency_h": round(float(latency_h.loc[idx]), 2), "values": _row_values(df, idx)})
         passed = n_fail == 0
         rec = None if passed else f"Latencia promedio de {details[0]['avg_latency_h']:.1f}h. Revisar pipeline de ingesta"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=n_valid, failed=n_fail, failure_pct=round(n_fail / n_valid * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)

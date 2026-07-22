@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, XCircle, AlertTriangle, Info,
-  FileDown, FileText, ExternalLink, Clock, Trash2,
+  FileDown, FileText, ExternalLink, Clock, Trash2, CheckCircle2,
 } from 'lucide-react'
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
@@ -36,6 +36,22 @@ export default function ReportDetail() {
     queryFn: () => api.get(`/reports/${id}`).then((r) => r.data),
     enabled: !!id,
   })
+
+  const { data: allActions = [] } = useQuery({
+    queryKey: ['report-actions', id],
+    queryFn: () => api.get(`/reports/${id}/actions`).then((r) => r.data),
+    enabled: !!id,
+  })
+
+  const actionsByRule = useMemo(() => {
+    const map: Record<number, { en_revision: number; solucionado: number }> = {}
+    for (const a of allActions) {
+      if (!map[a.rule_index]) map[a.rule_index] = { en_revision: 0, solucionado: 0 }
+      if (a.status === 'en_revision') map[a.rule_index].en_revision++
+      if (a.status === 'solucionado') map[a.rule_index].solucionado++
+    }
+    return map
+  }, [allActions])
 
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(`/reports/${id}`),
@@ -205,6 +221,26 @@ export default function ReportDetail() {
                       <span className={`text-sm ${rule.passed ? 'text-green-400' : 'text-red-400'}`}>
                         {rule.failed}/{rule.total} ({(rule.failure_pct ?? 0).toFixed(2)}%)
                       </span>
+                      {(() => {
+                        const counts = actionsByRule[i]
+                        if (!counts || (counts.en_revision === 0 && counts.solucionado === 0)) return null
+                        return (
+                          <div className="flex items-center gap-1.5">
+                            {counts.en_revision > 0 && (
+                              <span className="inline-flex items-center gap-1 text-xs text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded-full">
+                                <Clock className="w-3 h-3" />
+                                {counts.en_revision} en revisión
+                              </span>
+                            )}
+                            {counts.solucionado > 0 && (
+                              <span className="inline-flex items-center gap-1 text-xs text-green-400 bg-green-500/10 px-2 py-0.5 rounded-full">
+                                <CheckCircle2 className="w-3 h-3" />
+                                {counts.solucionado} solucionado{counts.solucionado !== 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })()}
                     </div>
                     <p className="text-muted text-sm mt-1">{rule.description}</p>
                     {rule.duration_ms > 0 && (

@@ -3,6 +3,11 @@ import pandas as pd
 from qdata.rules.base import Rule, RuleResult
 
 
+def _row_values(df: pd.DataFrame, idx: int) -> dict:
+    row = df.loc[idx]
+    return {col: (v.item() if hasattr(v, 'item') else v) for col, v in row.items()}
+
+
 class UniqueCheck(Rule):
     name = "unique_check"
     description = "Verifica unicidad de columnas candidatas a clave primaria"
@@ -39,6 +44,7 @@ class UniqueCheck(Rule):
                         "column": col,
                         "row": int(idx),
                         "value": str(df.loc[idx, col]),
+                        "values": _row_values(df, idx),
                     })
 
         if self.key_columns:

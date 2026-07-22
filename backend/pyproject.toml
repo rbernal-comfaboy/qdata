@@ -12,6 +12,7 @@ dependencies = [
     "pymysql>=1.1",
     "aiomysql>=0.2",
     "pyodbc>=5.2",
+    "pymssql>=2.3",
     "alembic>=1.14",
     "pandas>=2.2",
     "numpy>=2.0",

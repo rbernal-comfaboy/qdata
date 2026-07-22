@@ -1,12 +1,18 @@
 """Reglas de validación de formato: email, caracteres especiales, longitud, trim, mayúsculas, teléfono, CP, RFC/CURP."""
 
 import re
+import numpy as np
 import pandas as pd
 from qdata.rules.base import Rule, RuleResult
 
 
 def _str_cols(df: pd.DataFrame) -> list[str]:
     return [c for c in df.columns if pd.api.types.is_object_dtype(df[c]) or pd.api.types.is_string_dtype(df[c])]
+
+
+def _row_values(df: pd.DataFrame, idx: int) -> dict:
+    row = df.loc[idx]
+    return {col: (v.item() if hasattr(v, 'item') else v) for col, v in row.items()}
 
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$")
@@ -50,7 +56,7 @@ class EmailCheck(Rule):
                 failed += n_fail
                 details.append({"column": col, "failed": n_fail, "total": len(candidates), "pct": round(n_fail / len(candidates) * 100, 2)})
                 for idx in candidates[~mask].index:
-                    sample_failures.append({"column": col, "row": int(idx), "value": str(candidates.loc[idx])})
+                    sample_failures.append({"column": col, "row": int(idx), "value": str(candidates.loc[idx]), "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else "Corregir direcciones de email inválidas. Verificar dominios y formato local@dominio.tld"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total or len(df.columns), failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)
@@ -150,7 +156,7 @@ class SpecialCharsCheck(Rule):
                             if regex.search(char):
                                 found_chars.append({"char": repr(char), "name": self._char_name(char), "category": self.CATEGORY_LABELS.get(cat_name, cat_name)})
                                 break
-                    sample_failures.append({"column": col, "row": int(idx), "value": val, "chars_found": found_chars})
+                    sample_failures.append({"column": col, "row": int(idx), "value": val, "chars_found": found_chars, "values": _row_values(df, idx)})
 
         passed = failed == 0
         if worst_severity == "critical":
@@ -211,7 +217,7 @@ class StringLengthCheck(Rule):
                 failed += n_fail
                 details.append({"column": col, "failed": n_fail, "total": len(series), "pct": round(n_fail / len(series) * 100, 2), "min_len": int(series.str.len().min()), "max_len": int(series.str.len().max())})
                 for idx in comb[comb].index:
-                    sample_failures.append({"column": col, "row": int(idx), "value": str(series.loc[idx])[:50], "length": len(str(series.loc[idx]))})
+                    sample_failures.append({"column": col, "row": int(idx), "value": str(series.loc[idx])[:50], "length": len(str(series.loc[idx])), "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else f"Ajustar longitudes de cadena al rango esperado [{self.min_length}, {self.max_length}]"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total, failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)
@@ -235,7 +241,7 @@ class TrimCheck(Rule):
                 details.append({"column": col, "failed": n_fail, "total": len(series), "pct": round(n_fail / len(series) * 100, 2), "leading": int(has_lead.sum()), "trailing": int(has_trail.sum())})
                 for idx in comb[comb].index:
                     val = str(series.loc[idx])
-                    sample_failures.append({"column": col, "row": int(idx), "value": repr(val)})
+                    sample_failures.append({"column": col, "row": int(idx), "value": repr(val), "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else "Aplicar .str.strip() a las columnas afectadas para eliminar espacios extras"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total, failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)
@@ -269,7 +275,7 @@ class CaseConsistencyCheck(Rule):
                 failed += n_fail
                 details.append({"column": col, "failed": n_fail, "total": total_clean, "pct": round(n_fail / total_clean * 100, 2), "dominant_case": "lower" if lower > upper else "upper"})
                 for idx in mask[mask].index:
-                    sample_failures.append({"column": col, "row": int(idx), "value": str(series.loc[idx])})
+                    sample_failures.append({"column": col, "row": int(idx), "value": str(series.loc[idx]), "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else "Uniformar mayúsculas/minúsculas según el estándar del campo (.lower() o .upper())"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total, failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)
@@ -307,7 +313,7 @@ class PhoneCheck(Rule):
                 failed += n_fail
                 details.append({"column": col, "failed": n_fail, "total": len(candidates), "pct": round(n_fail / len(candidates) * 100, 2)})
                 for idx in candidates[~valid].index:
-                    sample_failures.append({"column": col, "row": int(idx), "value": str(candidates.loc[idx])})
+                    sample_failures.append({"column": col, "row": int(idx), "value": str(candidates.loc[idx]), "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else "Estandarizar formato telefónico internacional (+57 Colombia, +52 México, +1 US)"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total or len(df.columns), failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)
@@ -334,7 +340,7 @@ class ZipCodeCheck(Rule):
                 failed += n_fail
                 details.append({"column": col, "failed": n_fail, "total": len(candidates), "pct": round(n_fail / len(candidates) * 100, 2)})
                 for idx in candidates[~valid].index:
-                    sample_failures.append({"column": col, "row": int(idx), "value": str(candidates.loc[idx])})
+                    sample_failures.append({"column": col, "row": int(idx), "value": str(candidates.loc[idx]), "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else "Estandarizar códigos postales: MX=5 dígitos, US=5 o 9 dígitos, UK=formato alfanumérico"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total or len(df.columns), failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)
@@ -362,7 +368,7 @@ class RfcCurpCheck(Rule):
                 failed += n_fail
                 details.append({"column": col, "failed": n_fail, "total": len(candidates), "pct": round(n_fail / len(candidates) * 100, 2), "rfc_found": int(is_rfc.sum()), "curp_found": int(is_curp.sum())})
                 for idx in candidates[~valid].index:
-                    sample_failures.append({"column": col, "row": int(idx), "value": str(candidates.loc[idx])})
+                    sample_failures.append({"column": col, "row": int(idx), "value": str(candidates.loc[idx]), "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else "Corregir RFC (13 chars) o CURP (18 chars) según formato oficial SAT"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total or len(df.columns), failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)

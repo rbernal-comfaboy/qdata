@@ -3,6 +3,11 @@ import pandas as pd
 from qdata.rules.base import Rule, RuleResult
 
 
+def _row_values(df: pd.DataFrame, idx: int) -> dict:
+    row = df.loc[idx]
+    return {col: (v.item() if hasattr(v, 'item') else v) for col, v in row.items()}
+
+
 class RangeCheck(Rule):
     name = "range_check"
     description = "Detecta valores fuera de rango y outliers mediante IQR y z-score"
@@ -150,6 +155,7 @@ class RangeCheck(Rule):
                         "column": col,
                         "row": int(idx),
                         "value": float(series.loc[idx]),
+                        "values": _row_values(df, idx),
                     })
 
         failed = issue_count

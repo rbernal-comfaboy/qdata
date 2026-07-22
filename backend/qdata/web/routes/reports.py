@@ -162,6 +162,27 @@ async def delete_report(
     return {"status": "deleted"}
 
 
+@router.get("/{report_id}/actions")
+async def get_report_actions(
+    report_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(ErrorAction).where(ErrorAction.report_id == report_id)
+    )
+    actions = result.scalars().all()
+    return [
+        {
+            "error_index": a.error_index,
+            "rule_index": a.rule_index,
+            "status": a.status,
+            "updated_at": a.updated_at.isoformat() if a.updated_at else None,
+        }
+        for a in actions
+    ]
+
+
 @router.get("/{report_id}/rules/{rule_idx}/actions")
 async def get_rule_actions(
     report_id: str,

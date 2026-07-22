@@ -4,6 +4,11 @@ import pandas as pd
 
 from qdata.rules.base import Rule, RuleResult
 
+
+def _row_values(df: pd.DataFrame, idx: int) -> dict:
+    row = df.loc[idx]
+    return {col: (v.item() if hasattr(v, 'item') else v) for col, v in row.items()}
+
 COMMON_PATTERNS = {
     "email": r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$",
     "phone": r"^\+?[\d\s\-\(\)]{7,20}$",
@@ -51,6 +56,7 @@ class PatternCheck(Rule):
                         "column": col,
                         "row": int(idx),
                         "value": str(series.loc[idx]),
+                        "values": _row_values(df, idx),
                     })
 
         if not self.column_patterns:

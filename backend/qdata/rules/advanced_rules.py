@@ -5,6 +5,11 @@ import numpy as np
 from qdata.rules.base import Rule, RuleResult
 
 
+def _row_values(df: pd.DataFrame, idx: int) -> dict:
+    row = df.loc[idx]
+    return {col: (v.item() if hasattr(v, 'item') else v) for col, v in row.items()}
+
+
 class RowCompletenessCheck(Rule):
     name = "row_completeness_check"
     description = "Evalúa el % de campos poblados por registro y detecta filas casi vacías (<30% de datos)"
@@ -26,7 +31,7 @@ class RowCompletenessCheck(Rule):
         if n_fail:
             for idx in sparse[sparse].index:
                 null_cols = df.columns[df.loc[idx].isna()].tolist()
-                sample_failures.append({"row": int(idx), "completeness_pct": round(float(completeness.loc[idx]), 2), "null_columns": null_cols[:10]})
+                sample_failures.append({"row": int(idx), "completeness_pct": round(float(completeness.loc[idx]), 2), "null_columns": null_cols[:10], "values": _row_values(df, idx)})
         passed = n_fail == 0
         rec = None if passed else f"{n_fail} filas con <{self.min_completeness_pct}% de datos. Revisar origen o imputar valores faltantes"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total, failed=n_fail, failure_pct=round(n_fail / total * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)
