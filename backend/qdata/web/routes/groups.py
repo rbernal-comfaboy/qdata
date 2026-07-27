@@ -3,7 +3,7 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from qdata.db.models import AnalysisGroup, GroupPermission, Project, Report
@@ -38,32 +38,53 @@ async def list_groups(
         base_q = select(AnalysisGroup).where(
             or_(AnalysisGroup.user_id == user.id, AnalysisGroup.id.in_(subq))
         )
-    result = await session.execute(
-        base_q.order_by(AnalysisGroup.created_at.desc())
+
+    subq_proj_count = (
+        select(func.count(Project.id))
+        .where(Project.group_id == AnalysisGroup.id)
+        .correlate(AnalysisGroup)
+        .scalar_subquery()
     )
-    groups = result.scalars().all()
+    subq_report_count = (
+        select(func.count(Report.id))
+        .join(Project, Project.id == Report.project_id)
+        .where(Project.group_id == AnalysisGroup.id)
+        .correlate(AnalysisGroup)
+        .scalar_subquery()
+    )
+    subq_last_report = (
+        select(Report.executed_at)
+        .join(Project, Project.id == Report.project_id)
+        .where(Project.group_id == AnalysisGroup.id)
+        .correlate(AnalysisGroup)
+        .order_by(Report.executed_at.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    subq_avg_score = (
+        select(func.avg(Report.score))
+        .join(Project, Project.id == Report.project_id)
+        .where(Project.group_id == AnalysisGroup.id)
+        .correlate(AnalysisGroup)
+        .scalar_subquery()
+    )
+
+    result = await session.execute(
+        base_q.column(subq_proj_count.label("project_count"))
+        .column(subq_report_count.label("report_count"))
+        .column(subq_last_report.label("last_analysis"))
+        .column(subq_avg_score.label("avg_score"))
+        .order_by(AnalysisGroup.created_at.desc())
+    )
+    rows = result.all()
 
     out = []
-    for g in groups:
-        proj_count = await session.execute(
-            select(func.count(Project.id)).where(Project.group_id == g.id)
-        )
-        pcount = proj_count.scalar() or 0
-
-        report_count = await session.execute(
-            select(func.count(Report.id)).join(Project).where(Project.group_id == g.id)
-        )
-        rcount = report_count.scalar() or 0
-
-        last_report = await session.execute(
-            select(Report.executed_at).join(Project).where(Project.group_id == g.id).order_by(Report.executed_at.desc()).limit(1)
-        )
-        last = last_report.scalar()
-
-        avg = await session.execute(
-            select(func.avg(Report.score)).join(Project).where(Project.group_id == g.id)
-        )
-        avg_val = avg.scalar()
+    for row in rows:
+        g = row[0]
+        pcount = row[1] or 0
+        rcount = row[2] or 0
+        last = row[3]
+        avg_val = row[4]
         avg_score = round(avg_val, 2) if avg_val is not None else None
         if avg_score is not None:
             if avg_score >= 90:
@@ -164,10 +185,22 @@ async def group_dashboard(
     if not g:
         raise HTTPException(404, "Grupo no encontrado")
 
-    proj_result = await session.execute(
-        select(Project).where(Project.group_id == group_id).order_by(Project.created_at.desc())
+    subq_latest = (
+        select(Report.project_id, Report.id.label("report_id"))
+        .where(Report.project_id == Project.id)
+        .correlate(Project)
+        .order_by(Report.executed_at.desc())
+        .limit(1)
+        .subquery()
     )
-    projects = proj_result.scalars().all()
+
+    proj_result = await session.execute(
+        select(Project, subq_latest.c.report_id)
+        .outerjoin(subq_latest, Project.id == subq_latest.c.project_id)
+        .where(Project.group_id == group_id)
+        .order_by(Project.created_at.desc())
+    )
+    project_rows = proj_result.all()
 
     report_ids = []
     project_scores = []
@@ -175,36 +208,43 @@ async def group_dashboard(
     severity_counts = {"error": 0, "warning": 0, "info": 0}
     timeline = []
 
-    for p in projects:
-        rep_result = await session.execute(
-            select(Report).where(Report.project_id == p.id).order_by(Report.executed_at.desc()).limit(1)
-        )
-        rep = rep_result.scalar_one_or_none()
-        if rep:
-            report_ids.append(str(rep.id))
-            if rep.score is not None:
-                project_scores.append({"name": p.name, "score": rep.score, "date": rep.executed_at.isoformat() if rep.executed_at else None})
-            result_json = rep.result_json or {}
-            for rule in result_json.get("results", []):
-                rn = rule.get("rule_name", "unknown")
-                if rn not in rule_stats:
-                    rule_stats[rn] = {"passed": 0, "failed": 0, "total": 0}
-                if rule.get("passed"):
-                    rule_stats[rn]["passed"] += 1
-                else:
-                    rule_stats[rn]["failed"] += 1
-                rule_stats[rn]["total"] += 1
-                sev = rule.get("severity", "warning")
-                if sev in severity_counts:
-                    severity_counts[sev] += 1
-            timeline.append({
-                "date": rep.executed_at.isoformat() if rep.executed_at else None,
-                "score": rep.score,
-                "project": p.name,
-            })
+    if project_rows:
+        latest_report_ids = [r[1] for r in project_rows if r[1] is not None]
+        if latest_report_ids:
+            reports_result = await session.execute(
+                select(Report).where(Report.id.in_(latest_report_ids))
+            )
+            reports_map = {str(r.id): r for r in reports_result.scalars().all()}
+        else:
+            reports_map = {}
+
+        for proj, report_id in project_rows:
+            rep = reports_map.get(str(report_id)) if report_id else None
+            if rep:
+                report_ids.append(str(rep.id))
+                if rep.score is not None:
+                    project_scores.append({"name": proj.name, "score": rep.score, "date": rep.executed_at.isoformat() if rep.executed_at else None})
+                result_json = rep.result_json or {}
+                for rule in result_json.get("results", []):
+                    rn = rule.get("rule_name", "unknown")
+                    if rn not in rule_stats:
+                        rule_stats[rn] = {"passed": 0, "failed": 0, "total": 0}
+                    if rule.get("passed"):
+                        rule_stats[rn]["passed"] += 1
+                    else:
+                        rule_stats[rn]["failed"] += 1
+                    rule_stats[rn]["total"] += 1
+                    sev = rule.get("severity", "warning")
+                    if sev in severity_counts:
+                        severity_counts[sev] += 1
+                timeline.append({
+                    "date": rep.executed_at.isoformat() if rep.executed_at else None,
+                    "score": rep.score,
+                    "project": proj.name,
+                })
 
     avg_score = round(sum(s["score"] for s in project_scores) / len(project_scores), 2) if project_scores else 0
-    total_projects = len(projects)
+    total_projects = len(project_rows)
     total_reports = len(report_ids)
     total_rules_checked = sum(v["total"] for v in rule_stats.values())
     total_rules_passed = sum(v["passed"] for v in rule_stats.values())

@@ -1,3 +1,4 @@
+import time
 from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
@@ -8,6 +9,23 @@ from qdata.db.models import User
 from qdata.db.session import get_session
 
 security = HTTPBearer()
+
+_user_cache: dict[str, tuple[User, float]] = {}
+_CACHE_TTL = 300
+
+
+def _get_cached_user(user_id: str) -> User | None:
+    entry = _user_cache.get(user_id)
+    if entry and time.monotonic() - entry[1] < _CACHE_TTL:
+        return entry[0]
+    return None
+
+
+def _set_cached_user(user: User) -> None:
+    _user_cache[str(user.id)] = (user, time.monotonic())
+    if len(_user_cache) > 500:
+        oldest = min(_user_cache, key=lambda k: _user_cache[k][1])
+        del _user_cache[oldest]
 
 
 async def get_current_user(
@@ -20,10 +38,17 @@ async def get_current_user(
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    cached = _get_cached_user(user_id)
+    if cached:
+        return cached
+
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+    _set_cached_user(user)
     return user
 
 
@@ -45,10 +70,17 @@ async def get_user_or_token(
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    cached = _get_cached_user(user_id)
+    if cached:
+        return cached
+
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+    _set_cached_user(user)
     return user
 
 

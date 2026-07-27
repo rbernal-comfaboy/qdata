@@ -1,4 +1,5 @@
 import asyncio
+import re as _re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -21,6 +22,35 @@ class UpdateProcessRequest(BaseModel):
     rules_config: list[str] | None = None
 
 
+def _extract_names(sc: dict | None):
+    if not sc:
+        return None, None
+    st = sc.get("source_type") or ""
+    cs = sc.get("connection_string") or ""
+    fp = sc.get("file_path") or ""
+    query = sc.get("query") or ""
+    table_name = None
+    if query:
+        m = _re.search(r"FROM\s+[`\"']?(\w+)[`\"']?", query, _re.IGNORECASE)
+        if m:
+            table_name = m.group(1).upper()
+    if st in ("mysql", "postgresql", "sqlite", "mssql"):
+        source_label = table_name or st.upper()
+        db_name = cs.rsplit("/", 1)[-1].split("?")[0] if "/" in cs else None
+        connection_label = db_name.upper() if db_name else cs
+    elif st == "file":
+        source_label = "Archivo"
+        connection_label = fp.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] if fp else None
+    else:
+        source_label = st.upper() if st else None
+        m = _re.search(r"(?:DATABASE|Database)=([^;]+)", cs)
+        db_name = m.group(1).upper() if m else None
+        if not db_name:
+            db_name = cs.rsplit("/", 1)[-1].split("?")[0] if "/" in cs else None
+        connection_label = db_name or cs or fp or None
+    return source_label, connection_label
+
+
 @router.get("/")
 @router.get("")
 async def list_processes(
@@ -28,35 +58,6 @@ async def list_processes(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    def _extract_names(sc: dict | None):
-        if not sc:
-            return None, None
-        st = sc.get("source_type") or ""
-        cs = sc.get("connection_string") or ""
-        fp = sc.get("file_path") or ""
-        query = sc.get("query") or ""
-        import re as _re
-        table_name = None
-        if query:
-            m = _re.search(r"FROM\s+[`\"']?(\w+)[`\"']?", query, _re.IGNORECASE)
-            if m:
-                table_name = m.group(1).upper()
-        if st in ("mysql", "postgresql", "sqlite", "mssql"):
-            source_label = table_name or st.upper()
-            db_name = cs.rsplit("/", 1)[-1].split("?")[0] if "/" in cs else None
-            connection_label = db_name.upper() if db_name else cs
-        elif st == "file":
-            source_label = "Archivo"
-            connection_label = fp.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] if fp else None
-        else:
-            source_label = st.upper() if st else None
-            m = _re.search(r"(?:DATABASE|Database)=([^;]+)", cs)
-            db_name = m.group(1).upper() if m else None
-            if not db_name:
-                db_name = cs.rsplit("/", 1)[-1].split("?")[0] if "/" in cs else None
-            connection_label = db_name or cs or fp or None
-        return source_label, connection_label
-
     if user.role == "admin":
         query = select(Project)
     else:
@@ -68,16 +69,35 @@ async def list_processes(
         query = query.where(Project.group_id == group_id)
     result = await session.execute(query.order_by(desc(Project.created_at)))
     projects = result.scalars().all()
+
+    project_ids = [p.id for p in projects]
+    latest_map = {}
+    task_map = {}
+
+    if project_ids:
+        subq_latest = (
+            select(Report.project_id, Report.id.label("report_id"))
+            .where(Report.project_id.in_(project_ids))
+            .order_by(Report.executed_at.desc())
+            .subquery()
+        )
+        lr_result = await session.execute(
+            select(Report, subq_latest.c.project_id)
+            .join(subq_latest, Report.id == subq_latest.c.report_id)
+        )
+        for rep, pid in lr_result.all():
+            latest_map[str(pid)] = rep
+
+        task_result = await session.execute(
+            select(ScheduledTask).where(ScheduledTask.project_id.in_(project_ids))
+        )
+        for t in task_result.scalars().all():
+            task_map.setdefault(str(t.project_id), t)
+
     out = []
     for p in projects:
-        report_result = await session.execute(
-            select(Report).where(Report.project_id == p.id).order_by(desc(Report.executed_at)).limit(1)
-        )
-        latest = report_result.scalar_one_or_none()
-        task_result = await session.execute(
-            select(ScheduledTask).where(ScheduledTask.project_id == p.id).limit(1)
-        )
-        task = task_result.scalar_one_or_none()
+        latest = latest_map.get(str(p.id))
+        task = task_map.get(str(p.id))
         sl, cl = _extract_names(p.source_config)
         out.append({
             "id": str(p.id),
