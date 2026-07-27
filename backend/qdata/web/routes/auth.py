@@ -22,6 +22,16 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class UpdateProfileRequest(BaseModel):
+    name: str | None = None
+    email: EmailStr | None = None
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -73,3 +83,39 @@ async def login(req: LoginRequest, session: AsyncSession = Depends(get_session))
 @router.get("/me", response_model=UserResponse)
 async def me(user: User = Depends(get_current_user)):
     return UserResponse.from_orm_with_uuid(user)
+
+
+@router.put("/me")
+async def update_profile(
+    req: UpdateProfileRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if req.email and req.email != user.email:
+        existing = await session.execute(select(User).where(User.email == req.email, User.id != user.id))
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="Email already registered")
+        user.email = req.email
+
+    if req.name is not None:
+        user.name = req.name
+
+    await session.commit()
+    return UserResponse.from_orm_with_uuid(user)
+
+
+@router.put("/password")
+async def change_password(
+    req: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if not verify_password(req.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+
+    user.password_hash = hash_password(req.new_password)
+    await session.commit()
+    return {"status": "ok"}

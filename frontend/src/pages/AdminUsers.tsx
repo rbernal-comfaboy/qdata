@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Users, Trash2, Shield, Plus, Loader2, AlertCircle, CheckCircle, ChevronDown, ChevronRight } from 'lucide-react'
+import { Users, Trash2, Shield, Plus, Loader2, AlertCircle, CheckCircle, ChevronDown, ChevronRight, Pencil } from 'lucide-react'
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
 import { useAuthStore } from '../hooks/useAuth'
@@ -26,6 +26,9 @@ export default function AdminUsers() {
   const [formError, setFormError] = useState('')
   const [expandedUser, setExpandedUser] = useState<string | null>(null)
   const [editingGroups, setEditingGroups] = useState<string[]>([])
+  const [editingUserId, setEditingUserId] = useState<string | null>(null)
+  const [editForm, setEditForm] = useState({ name: '', email: '', password: '', role: '' })
+  const [editError, setEditError] = useState('')
 
   const { data: users, isLoading } = useQuery({
     queryKey: ['admin-users'],
@@ -68,6 +71,17 @@ export default function AdminUsers() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
   })
 
+  const updateUserMutation = useMutation({
+    mutationFn: ({ userId, data }: { userId: string; data: any }) =>
+      api.put(`/admin/users/${userId}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] })
+      setEditingUserId(null)
+      setEditError('')
+    },
+    onError: (err: any) => setEditError(err?.response?.data?.detail || 'Error al actualizar usuario'),
+  })
+
   const deleteMutation = useMutation({
     mutationFn: (userId: string) => api.delete(`/admin/users/${userId}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
@@ -88,6 +102,118 @@ export default function AdminUsers() {
     } else {
       setEditingGroups((prev) => prev.includes(groupId) ? prev.filter((g) => g !== groupId) : [...prev, groupId])
     }
+  }
+
+  const startEdit = (u: any) => {
+    setEditingUserId(u.id)
+    setEditForm({ name: u.name || '', email: u.email || '', password: '', role: u.role || 'analyst' })
+    setEditError('')
+    setExpandedUser(null)
+  }
+
+  const renderUserCard = (u: any) => {
+    if (editingUserId === u.id) {
+      return (
+        <GlassContainer key={u.id}>
+          <div className="space-y-3">
+            {editError && (
+              <div className="flex items-center gap-2 text-sm text-red-400 p-2 bg-red-500/10 rounded-lg">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                {editError}
+              </div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input type="text" placeholder="Nombre" value={editForm.name}
+                onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                className="glass-input" />
+              <input type="email" placeholder="Email" value={editForm.email}
+                onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                className="glass-input" />
+              <input type="password" placeholder="Nueva contraseña (opcional)" value={editForm.password}
+                onChange={(e) => setEditForm({ ...editForm, password: e.target.value })}
+                className="glass-input" />
+              <select value={editForm.role}
+                onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
+                className="glass-input">
+                <option value="analyst">Analista</option>
+                <option value="admin">Admin</option>
+                <option value="viewer">Solo vista</option>
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => {
+                const payload: any = { name: editForm.name, email: editForm.email, role: editForm.role }
+                if (editForm.password) payload.password = editForm.password
+                updateUserMutation.mutate({ userId: u.id, data: payload })
+              }}
+                disabled={updateUserMutation.isPending || !editForm.email}
+                className="btn-primary text-sm flex items-center gap-1">
+                {updateUserMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
+                Guardar
+              </button>
+              <button onClick={() => { setEditingUserId(null); setEditError('') }}
+                className="btn-ghost text-sm">Cancelar</button>
+            </div>
+          </div>
+        </GlassContainer>
+      )
+    }
+
+    return (
+      <GlassContainer key={u.id}>
+        <div className="flex items-center gap-4">
+          {(u.role !== 'admin') && (
+            <button
+              onClick={() => setExpandedUser(expandedUser === u.id ? null : u.id)}
+              className="p-1 text-muted hover:text-white transition-colors"
+              title="Asignar grupos"
+            >
+              {expandedUser === u.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+            </button>
+          )}
+          <div className="w-10 h-10 rounded-full bg-indigo-500/20 flex items-center justify-center text-sm font-semibold text-indigo-400">
+            {(u.name || '?').charAt(0).toUpperCase()}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-medium">{u.name}</p>
+            <p className="text-sm text-muted truncate">{u.email}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={u.role}
+              onChange={(e) => {
+                if (u.id === currentUser?.id) return
+                updateRoleMutation.mutate({ userId: u.id, role: e.target.value })
+              }}
+              disabled={u.id === currentUser?.id}
+              className={`glass-input !py-1 !px-2 text-xs font-semibold rounded ${ROLE_COLORS[u.role] || ''}`}
+              style={{ border: 'none' }}
+            >
+              <option value="admin">Admin</option>
+              <option value="analyst">Analista</option>
+              <option value="viewer">Solo vista</option>
+            </select>
+            <button
+              onClick={() => startEdit(u)}
+              className="btn-ghost p-2 text-indigo-400 hover:text-indigo-300"
+              title="Editar usuario"
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
+            {u.id !== currentUser?.id && (
+              <button
+                onClick={() => { if (confirm('Eliminar este usuario?')) deleteMutation.mutate(u.id) }}
+                disabled={deleteMutation.isPending}
+                className="btn-ghost p-2 text-red-400 hover:text-red-300"
+                title="Eliminar usuario"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+      </GlassContainer>
+    )
   }
 
   return (
@@ -168,54 +294,9 @@ export default function AdminUsers() {
         <div className="space-y-3">
           {users?.map((u: any) => (
             <div key={u.id}>
-              <GlassContainer>
-                <div className="flex items-center gap-4">
-                  {(u.role !== 'admin') && (
-                    <button
-                      onClick={() => setExpandedUser(expandedUser === u.id ? null : u.id)}
-                      className="p-1 text-muted hover:text-white transition-colors"
-                      title="Asignar grupos"
-                    >
-                      {expandedUser === u.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                    </button>
-                  )}
-                  <div className="w-10 h-10 rounded-full bg-indigo-500/20 flex items-center justify-center text-sm font-semibold text-indigo-400">
-                    {(u.name || '?').charAt(0).toUpperCase()}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium">{u.name}</p>
-                    <p className="text-sm text-muted truncate">{u.email}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={u.role}
-                      onChange={(e) => {
-                        if (u.id === currentUser?.id) return
-                        updateRoleMutation.mutate({ userId: u.id, role: e.target.value })
-                      }}
-                      disabled={u.id === currentUser?.id}
-                      className={`glass-input !py-1 !px-2 text-xs font-semibold rounded ${ROLE_COLORS[u.role] || ''}`}
-                      style={{ border: 'none' }}
-                    >
-                      <option value="admin">Admin</option>
-                      <option value="analyst">Analista</option>
-                      <option value="viewer">Solo vista</option>
-                    </select>
-                    {u.id !== currentUser?.id && (
-                      <button
-                        onClick={() => { if (confirm('Eliminar este usuario?')) deleteMutation.mutate(u.id) }}
-                        disabled={deleteMutation.isPending}
-                        className="btn-ghost p-2 text-red-400 hover:text-red-300"
-                        title="Eliminar usuario"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </GlassContainer>
+              {renderUserCard(u)}
 
-              {expandedUser === u.id && (
+              {expandedUser === u.id && editingUserId !== u.id && (
                 <GlassContainer className="mt-1 ml-6">
                   <div className="flex items-center justify-between mb-3">
                     <label className="block text-sm font-medium text-white">Grupos de análisis permitidos</label>

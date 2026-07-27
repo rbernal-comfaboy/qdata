@@ -37,6 +37,13 @@ class CreateUserRequest(BaseModel):
     group_ids: list[str] = []
 
 
+class UpdateUserRequest(BaseModel):
+    name: str | None = None
+    email: EmailStr | None = None
+    password: str | None = None
+    role: str | None = None
+
+
 class GroupPermissionOut(BaseModel):
     group_id: str
     group_name: str
@@ -140,6 +147,45 @@ async def delete_user(
     await session.delete(target)
     await session.commit()
     return {"status": "ok"}
+
+
+@router.put("/users/{user_id}")
+async def update_user(
+    user_id: str,
+    req: UpdateUserRequest,
+    user: User = Depends(require_permission("manage:users")),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(User).where(User.id == user_id))
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if req.email and req.email != target.email:
+        existing = await session.execute(select(User).where(User.email == req.email, User.id != user_id))
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="Email already registered")
+        target.email = req.email
+
+    if req.name is not None:
+        target.name = req.name
+
+    if req.password:
+        target.password_hash = hash_password(req.password)
+
+    if req.role:
+        if req.role not in ("admin", "analyst", "viewer"):
+            raise HTTPException(status_code=400, detail="Invalid role")
+        target.role = req.role
+
+    await session.commit()
+    return UserOut(
+        id=str(target.id),
+        email=target.email,
+        name=target.name or "",
+        role=target.role or "analyst",
+        created_at=target.created_at.isoformat() if target.created_at else None,
+    )
 
 
 @router.get("/groups")
