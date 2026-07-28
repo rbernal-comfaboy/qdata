@@ -33,6 +33,7 @@ export default function ProcessDetail() {
   const [editQuery, setEditQuery] = useState('')
   const [editFilePath, setEditFilePath] = useState('')
   const [editRules, setEditRules] = useState<string[]>([])
+  const [editGroupId, setEditGroupId] = useState<string>('')
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
   const esRef = useRef<EventSource | null>(null)
@@ -63,6 +64,12 @@ export default function ProcessDetail() {
   const { data: rulesData } = useQuery({
     queryKey: ['rules-groups'],
     queryFn: () => api.get('/rules/groups').then((r) => r.data),
+    enabled: editing,
+  })
+
+  const { data: analysisGroups = [] } = useQuery({
+    queryKey: ['api-groups'],
+    queryFn: () => api.get('/api/groups').then((r) => r.data),
     enabled: editing,
   })
 
@@ -201,6 +208,7 @@ export default function ProcessDetail() {
     setEditQuery(sc.query || '')
     setEditFilePath(sc.file_path || '')
     setEditRules(process.rules_config || [])
+    setEditGroupId(process.group_id || '')
     setEditing(true)
   }
 
@@ -209,6 +217,7 @@ export default function ProcessDetail() {
       name: editName,
       source_config: { source_type: editSourceType, connection_string: editConnStr, query: editQuery, file_path: editFilePath },
       rules_config: editRules,
+      group_id: editGroupId || null,
     })
   }
 
@@ -667,6 +676,16 @@ export default function ProcessDetail() {
                 <div>
                   <label className="block text-sm text-muted mb-1">Consulta SQL</label>
                   <textarea value={editQuery} onChange={(e) => setEditQuery(e.target.value)} className="glass-input font-mono text-sm min-h-[80px]" />
+                </div>
+
+                <div>
+                  <label className="block text-sm text-muted mb-1">Grupo de análisis</label>
+                  <select value={editGroupId} onChange={(e) => setEditGroupId(e.target.value)} className="glass-input">
+                    <option value="">Sin grupo</option>
+                    {analysisGroups.map((g: any) => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>

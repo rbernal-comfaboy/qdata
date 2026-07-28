@@ -20,6 +20,7 @@ class UpdateProcessRequest(BaseModel):
     name: str | None = None
     source_config: dict | None = None
     rules_config: list[str] | None = None
+    group_id: str | None = None
 
 
 def _extract_names(sc: dict | None):
@@ -162,6 +163,7 @@ async def get_process(
         "progress": project.progress,
         "source_config": project.source_config,
         "rules_config": project.rules_config,
+        "group_id": str(project.group_id) if project.group_id else None,
         "created_at": project.created_at.isoformat() if project.created_at else None,
         "updated_at": project.updated_at.isoformat() if project.updated_at else None,
         "reports": [
@@ -211,6 +213,8 @@ async def update_process(
         project.source_config = req.source_config
     if req.rules_config is not None:
         project.rules_config = req.rules_config
+    if req.group_id is not None:
+        project.group_id = req.group_id if req.group_id else None
 
     await session.commit()
     return {"ok": True}
