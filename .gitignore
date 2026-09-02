@@ -31,3 +31,14 @@ Thumbs.db
 *.report.json
 *.parquet
 data/uploads/
+
+# Database backups
+qdata_backup*
+*.dump
+
+# Scratch / test files
+clientsdk.tar
+test_odbc.c
+test_tls.py
+test_unicode.c
+tmp_check_syms.sh
