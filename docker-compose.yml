@@ -51,7 +51,7 @@ services:
         condition: service_healthy
     command: >
       sh -c "python -m alembic upgrade head &&
-             uvicorn qdata.web.main:app --host 0.0.0.0 --port 8000 --reload"
+             uvicorn qdata.web.main:app --host 0.0.0.0 --port 8000"
 
   frontend:
     build:
@@ -64,7 +64,9 @@ services:
       - ./frontend:/app
       - /app/node_modules
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
   mailpit:
     image: axllent/mailpit:latest

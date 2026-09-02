@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
-import { describeError } from '../lib/ruleDescriptions'
+import { describeError, displayName, identityColumns } from '../lib/ruleDescriptions'
 
 const STATUS_OPTIONS = [
   { value: 'sin_accion', label: 'Sin acción', icon: Circle, color: 'text-muted' },
@@ -23,6 +23,8 @@ const severityColors: Record<string, string> = {
 const GROUP_RULE_TYPES: Record<string, string> = {
   person_composite_similarity: 'person_composite_groups',
   personas_similares: 'personas_similares_groups',
+  personas_similares_v2: 'personas_similares_v2_groups',
+  personas_similares_v3: 'personas_similares_groups',
   fuzzy_name_match: 'fuzzy_name_groups',
   fuzzy_id_match: 'fuzzy_id_groups',
   similar_dob: 'similar_dob_groups',
@@ -32,6 +34,15 @@ function getGroupMembers(rule: any, item: any): any[] {
   const typeKey = GROUP_RULE_TYPES[rule.rule_name]
   if (!typeKey) return []
   const detailItem = (rule.details || []).find((d: any) => d.type === typeKey)
+  if (!detailItem?.groups) return []
+  const rowIdx = item.row
+  const group = detailItem.groups.find((g: any) => g.rows?.some((r: any) => r.row === rowIdx))
+  return group?.rows || []
+}
+
+function getDuplicateGroupMembers(rule: any, item: any): any[] {
+  if (rule.rule_name !== 'duplicate_check') return []
+  const detailItem = (rule.details || []).find((d: any) => d.type === 'duplicate_groups')
   if (!detailItem?.groups) return []
   const rowIdx = item.row
   const group = detailItem.groups.find((g: any) => g.rows?.some((r: any) => r.row === rowIdx))
@@ -67,6 +78,8 @@ function getErrorExplanation(ruleName: string): { meaning: string; steps: string
     derived_column_check: { meaning: 'Columna calculada no coincide con el valor esperado.', steps: ['Verifica la fórmula.', 'Recalcula la columna.', 'Automatiza verificación en ETL.'] },
     person_composite_similarity: { meaning: 'Registros que podrían ser la misma persona con variaciones.', steps: ['Revisa cada grupo manualmente.', 'Si es la misma persona, unifica.', 'Ajusta el threshold si hay muchos falsos positivos.'] },
     personas_similares: { meaning: 'Se detectaron registros que parecen ser la misma persona pero con errores de captura o variaciones en los datos.', steps: ['Compara lado a lado los registros del grupo.', 'Identifica cuáles son duplicados reales.', 'Unifica los registros duplicados manteniendo los datos más completos.', 'Si hay falsos positivos, ajusta el threshold o las columnas de comparación.'] },
+    personas_similares_v2: { meaning: 'Se detectaron personas creadas dos veces con pequeñas diferencias (cédula con dígitos cambiados, mismo nombre, etc.) según las columnas y pesos que configuraste.', steps: ['Compara lado a lado los registros del grupo.', 'Identifica cuáles son duplicados reales.', 'Unifica los registros duplicados manteniendo los datos más completos.', 'Si hay falsos positivos, ajusta el threshold o los pesos de los campos.'] },
+    personas_similares_v3: { meaning: 'Se detectaron personas creadas dos veces con pequeñas diferencias (cédula con dígitos cambiados, mismo nombre, etc.) comparando identificación, nombre y apellido en modo profundo.', steps: ['Compara lado a lado los registros del grupo.', 'Identifica cuáles son duplicados reales.', 'Unifica los registros duplicados manteniendo los datos más completos.', 'Si hay falsos positivos, ajusta el threshold o las columnas de comparación.'] },
     fuzzy_name_match: { meaning: 'Registros con nombres muy similares.', steps: ['Revisa los pares.', 'Si es la misma persona corrige el nombre.', 'Si son diferentes, sube el threshold.'] },
     fuzzy_id_match: { meaning: 'IDs muy similares con 1-2 dígitos de diferencia.', steps: ['Compara dígito por dígito.', 'Si es el mismo, corrige.', 'Agrega validación de dígito verificador.'] },
     similar_dob: { meaning: 'Fechas de nacimiento muy cercanas.', steps: ['Revisa si es la misma persona con error en el día.', 'Ajusta window_days si hay muchos falsos positivos.'] },
@@ -74,7 +87,41 @@ function getErrorExplanation(ruleName: string): { meaning: string; steps: string
   return map[ruleName] || { meaning: 'Se detectó un valor inesperado.', steps: ['Revisa el valor actual.', 'Consulta la fuente original.', 'Corrige si es error de captura.', 'Agrega validaciones en la ingesta.'] }
 }
 
-function renderVal(v: any) {
+const EMAIL_COL_RE = /email|correo|e-?mail|mail|contacto/i
+
+function isEmailColumn(key: string) {
+  return EMAIL_COL_RE.test(key)
+}
+
+const PHONE_COL_RE = /tele|tel[^e]|celu|celular|mobile|phone|fijo|whatsapp|movil|ntel/i
+
+function isPhoneColumn(key: string) {
+  if (!PHONE_COL_RE.test(key)) return false
+  // Only show the primary phone column in the UI; hide secondary ones
+  // (PerTelCel, PerTelCli, etc.) so only PerTelefo is displayed.
+  return !/^(PerTelCel|PerTelCli)$/i.test(key)
+}
+
+function contactKeysFor(keys: string[], mode: 'phone' | 'email' | 'none'): string[] {
+  if (mode === 'phone') return keys.filter((k) => isPhoneColumn(k))
+  if (mode === 'email') return keys.filter((k) => isEmailColumn(k))
+  return []
+}
+
+function isEmptyEmail(v: any) {
+  if (v === null || v === undefined) return true
+  if (typeof v === 'number' && Number.isNaN(v)) return true
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase()
+    return s === '' || s === 'nan' || s === 'none' || s === 'null' || s === 'nat'
+  }
+  return false
+}
+
+function renderVal(v: any, key?: string) {
+  if (key && isEmailColumn(key) && isEmptyEmail(v)) {
+    return <span className="text-orange-300 italic">No tiene ningun email</span>
+  }
   if (v === null || v === undefined) return <span className="text-muted italic">NULL</span>
   if (Array.isArray(v)) return v.join(', ')
   if (typeof v === 'object') return JSON.stringify(v)
@@ -149,11 +196,37 @@ export default function ErrorDetail() {
 
   const info = describeError(rule.rule_name, item, rule.recommendation)
   const explanation = getErrorExplanation(rule.rule_name)
-  const isDuplicateGroup = rule.rule_name === 'duplicate_check' && item.rows?.length > 0
-  const duplicateGroupRows = isDuplicateGroup ? item.rows : []
-  const fullRecord = isDuplicateGroup ? (duplicateGroupRows[0]?.values || null) : (item.values || null)
-  const recordEntries = fullRecord ? Object.entries(fullRecord) : []
+  const dupeGroupRows = getDuplicateGroupMembers(rule, item)
+  const isDuplicateGroup = rule.rule_name === 'duplicate_check' && (dupeGroupRows.length > 0 || (item.rows?.length ?? 0) > 0)
+  const duplicateGroupRows = isDuplicateGroup ? (dupeGroupRows.length > 0 ? dupeGroupRows : item.rows || []) : []
+  const fullRecord = isDuplicateGroup
+    ? (Object.keys(item.values || {}).length > 0 ? item.values : (duplicateGroupRows[0]?.values || null))
+    : (item.values || null)
+  const recordIdentityKeys = fullRecord ? identityColumns(fullRecord) : []
+  const reportRules = (rules || []).map((r: any) => r.rule_name)
+  const contactMode = reportRules.includes('phone_check') ? 'phone' : reportRules.includes('email_check') ? 'email' : 'none'
+  const recordTableKeys = (['email_check', 'phone_check', 'duplicate_check'].includes(rule.rule_name) && recordIdentityKeys.length > 0)
+    ? [...recordIdentityKeys, ...contactKeysFor(Object.keys(fullRecord), contactMode).filter((k) => !recordIdentityKeys.includes(k))]
+    : (fullRecord ? (() => {
+        const srcCols: string[] = report?.selected_columns || []
+        const intersection = srcCols.filter((k) => k in fullRecord)
+        return intersection.length > 0 ? intersection : Object.keys(fullRecord)
+      })() : [])
+  const recordEntries = fullRecord ? recordTableKeys.map((k) => [k, fullRecord[k]] as [string, any]) : []
+  const emailEntry = fullRecord ? recordEntries.find(([k]) => isEmailColumn(k)) : undefined
+  const emailIsEmpty = emailEntry ? isEmptyEmail(emailEntry[1]) : false
+  const firstMemberVals = duplicateGroupRows[0]?.values || {}
+  const identityKeys = identityColumns(firstMemberVals)
+  const groupTableKeys = identityKeys.length > 0
+    ? [...identityKeys, ...contactKeysFor(Object.keys(firstMemberVals), contactMode).filter((k) => !identityKeys.includes(k))]
+    : Object.keys(firstMemberVals)
   const groupMembers = getGroupMembers(rule, item)
+  const memberVals0 = groupMembers[0]?.values || item.values || {}
+  const sourceSelectedCols: string[] = report?.selected_columns || []
+  const selectedIntersection = sourceSelectedCols.filter((k) => k in memberVals0)
+  const groupMemberKeys = sourceSelectedCols.length > 0 && selectedIntersection.length > 0
+    ? selectedIntersection
+    : Object.keys(memberVals0)
   const [copied, setCopied] = useState(false)
 
   const extractTable = (query: string): string | null => {
@@ -188,14 +261,15 @@ export default function ErrorDetail() {
       <Link to={`/reports/${reportId}/rules/${ruleIdx}`}
         className="inline-flex items-center gap-2 text-muted hover:text-white transition-colors mb-6">
         <ArrowLeft className="w-4 h-4" />
-        Volver a {rule.rule_name}
+        Volver a {displayName(rule.rule_name)}
       </Link>
 
       <GlassContainer>
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
             <div>
-              <h1 className="text-2xl font-bold text-white">{rule.rule_name}</h1>
+              <h1 className="text-2xl font-bold text-white">{displayName(rule.rule_name)}</h1>
+              <p className="text-muted text-xs">{rule.rule_name}</p>
               <p className="text-muted text-sm mt-1">Error #{ei + 1} de {failures.length}</p>
             </div>
           </div>
@@ -236,6 +310,7 @@ export default function ErrorDetail() {
               <div>
                 <p className="text-white font-medium">{info.descripcion}</p>
                 <p className="text-red-300 text-sm mt-1">{info.sugerencia}</p>
+                <p className="text-green-300 text-sm mt-2"><strong>Qué hacer:</strong> {info.que_hacer}</p>
               </div>
             </div>
           </div>
@@ -261,7 +336,11 @@ export default function ErrorDetail() {
               {info.valor != null && (
                 <div className="bg-white/5 rounded-lg p-3 col-span-1">
                   <p className="text-xs text-muted mb-1">Valor actual</p>
-                  <p className="text-red-400 font-mono text-sm break-all max-h-20 overflow-y-auto">{info.valor}</p>
+                  {emailIsEmpty ? (
+                    <p className="text-orange-300 italic font-mono text-sm">No tiene ningun email</p>
+                  ) : (
+                    <p className="text-red-400 font-mono text-sm break-all max-h-20 overflow-y-auto">{info.valor}</p>
+                  )}
                 </div>
               )}
             </div>
@@ -278,7 +357,7 @@ export default function ErrorDetail() {
                   <thead>
                     <tr className="border-b border-white/10">
                       <th className="text-left p-2.5 text-muted font-medium">#</th>
-                      {recordEntries.map(([key]) => <th key={key} className="text-left p-2.5 text-muted font-medium whitespace-nowrap">{key}</th>)}
+                      {groupTableKeys.map((key) => <th key={key} className="text-left p-2.5 text-muted font-medium whitespace-nowrap">{key}</th>)}
                     </tr>
                   </thead>
                   <tbody>
@@ -288,7 +367,7 @@ export default function ErrorDetail() {
                       return (
                         <tr key={mi} className={'border-b border-white/5 last:border-0 ' + (isCurrent ? 'bg-indigo-500/20' : '')}>
                           <td className="p-2.5 text-muted font-mono">{member.row != null ? Number(member.row) + 2 : mi + 1}</td>
-                          {recordEntries.map(([key]) => <td key={key} className="p-2.5 text-white font-mono whitespace-nowrap">{renderVal(vals[key])}</td>)}
+                          {groupTableKeys.map((key) => <td key={key} className="p-2.5 text-white font-mono whitespace-nowrap">{renderVal(vals[key], key)}</td>)}
                         </tr>
                       )
                     })}
@@ -314,7 +393,7 @@ export default function ErrorDetail() {
                   <tbody>
                     <tr className="border-b border-white/5">
                       {recordEntries.map(([key, val]) => (
-                        <td key={key} className="p-2 text-white font-mono whitespace-nowrap">{renderVal(val)}</td>
+                        <td key={key} className="p-2 text-white font-mono whitespace-nowrap">{renderVal(val, key)}</td>
                       ))}
                     </tr>
                   </tbody>
@@ -334,7 +413,7 @@ export default function ErrorDetail() {
                   <thead>
                     <tr className="border-b border-white/10">
                       <th className="text-left p-2.5 text-muted font-medium">#</th>
-                      {recordEntries.map(([key]) => <th key={key} className="text-left p-2.5 text-muted font-medium whitespace-nowrap">{key}</th>)}
+                      {groupMemberKeys.map((key) => <th key={key} className="text-left p-2.5 text-muted font-medium whitespace-nowrap">{key}</th>)}
                     </tr>
                   </thead>
                   <tbody>
@@ -344,7 +423,7 @@ export default function ErrorDetail() {
                       return (
                         <tr key={mi} className={'border-b border-white/5 last:border-0 ' + (isCurrent ? 'bg-red-500/10' : '')}>
                           <td className="p-2.5 text-muted font-mono">{isCurrent ? '← este' : mi + 1}</td>
-                          {recordEntries.map(([key]) => <td key={key} className="p-2.5 text-white font-mono whitespace-nowrap">{renderVal(vals[key])}</td>)}
+                          {groupMemberKeys.map((key) => <td key={key} className="p-2.5 text-white font-mono whitespace-nowrap">{renderVal(vals[key], key)}</td>)}
                         </tr>
                       )
                     })}

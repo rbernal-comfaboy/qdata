@@ -4,25 +4,38 @@ import tailwindcss from '@tailwindcss/vite'
 
 const backend = 'http://qdata-backend:8000'
 
+const proxyTarget = {
+  target: backend,
+  changeOrigin: true,
+  configure: (proxy: any) => {
+    proxy.on('error', (err: any, _req: any, res: any) => {
+      console.error('[vite proxy error]', err.message)
+      if (res?.writeHead) {
+        try { res.writeHead(502); res.end('Bad Gateway') } catch {}
+      }
+    })
+  },
+}
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
     host: true,
     proxy: {
-      '/auth': { target: backend, changeOrigin: true },
-      '/analyze': { target: backend, changeOrigin: true },
-      '/reports': { target: backend, changeOrigin: true },
-      '/rules': { target: backend, changeOrigin: true },
-      '/synthetic': { target: backend, changeOrigin: true },
-      '/scheduler': { target: backend, changeOrigin: true },
-      '/upload': { target: backend, changeOrigin: true },
-      '/processes': { target: backend, changeOrigin: true },
-      '/datasources': { target: backend, changeOrigin: true },
-      '/sources': { target: backend, changeOrigin: true },
-      '/api': { target: backend, changeOrigin: true },
-      '/admin': { target: backend, changeOrigin: true },
-      '/health': { target: backend, changeOrigin: true },
+      '/auth': proxyTarget,
+      '/analyze': proxyTarget,
+      '/reports': proxyTarget,
+      '/rules': proxyTarget,
+      '/synthetic': proxyTarget,
+      '/scheduler': proxyTarget,
+      '/upload': proxyTarget,
+      '/processes': proxyTarget,
+      '/datasources': proxyTarget,
+      '/sources': proxyTarget,
+      '/api': proxyTarget,
+      '/admin': proxyTarget,
+      '/health': proxyTarget,
     },
   },
 })

@@ -14,6 +14,7 @@ import {
   Moon,
   FolderTree,
   Users,
+  BarChart3,
 } from 'lucide-react'
 import { useAuthStore } from '../../hooks/useAuth'
 import { useTheme } from '../../hooks/useTheme'
@@ -29,6 +30,7 @@ const links = [
   { to: '/reports', icon: FileText, label: 'Reportes' },
   { to: '/rules', icon: Shield, label: 'Reglas' },
   { to: '/scheduler', icon: Clock, label: 'Programador' },
+  { to: '/statistics', icon: BarChart3, label: 'Estadísticas Por Grupo' },
   { to: '/settings', icon: Settings, label: 'Ajustes' },
 ]
 

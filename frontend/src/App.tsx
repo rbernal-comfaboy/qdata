@@ -25,6 +25,7 @@ const Sources = lazy(() => import('./pages/Sources'))
 const SourceForm = lazy(() => import('./pages/SourceForm'))
 const Groups = lazy(() => import('./pages/Groups'))
 const GroupDashboard = lazy(() => import('./pages/GroupDashboard'))
+const Statistics = lazy(() => import('./pages/Statistics'))
 const AdminUsers = lazy(() => import('./pages/AdminUsers'))
 
 function PageLoader() {
@@ -75,6 +76,7 @@ export default function App() {
             <Route path="scheduler/new" element={<SchedulerNew />} />
             <Route path="groups" element={<Groups />} />
             <Route path="groups/:groupId" element={<GroupDashboard />} />
+            <Route path="statistics" element={<Statistics />} />
             <Route path="settings" element={<Settings />} />
             <Route path="admin/users" element={<AdminUsers />} />
           </Route>

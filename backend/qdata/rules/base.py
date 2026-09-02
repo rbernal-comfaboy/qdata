@@ -3,6 +3,13 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+MAX_SAMPLE_FAILURES = 100
+MAX_SAMPLE_FAILURES_GENERIC = 5000
+MAX_DUPE_ROWS_PER_GROUP = 10
+MAX_DUPE_ENTRIES = 5000
+MAX_DUPE_GROUP_TOTAL = 20000
+PERSONAS_SIMILARES_RULES = ("personas_similares", "personas_similares_v2", "personas_similares_v3")
+
 
 @dataclass
 class RuleResult:

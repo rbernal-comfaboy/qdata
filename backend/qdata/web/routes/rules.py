@@ -32,6 +32,8 @@ RULE_METADATA = {
     "phone_valid": {"label": "Teléfono válido", "group": "formato", "severity": "error", "desc": "Valida formato de números telefónicos"},
     "zip_valid": {"label": "Código postal válido", "group": "formato", "severity": "error", "desc": "Valida formato de código postal (MX, US, UK)"},
     "rfc_curp": {"label": "RFC / CURP", "group": "formato", "severity": "error", "desc": "Valida estructura de RFC y CURP mexicanos"},
+    "cedula_valid": {"label": "Cédula válida", "group": "formato", "severity": "error", "desc": "Valida formato de Cédula de Ciudadanía colombiana (solo dígitos, 6, 7, 8 o 10 posiciones, NUIP inicia en 1)"},
+    "nit_valid": {"label": "NIT válido", "group": "formato", "severity": "error", "desc": "Valida formato de NIT colombiano y dígito de verificación (Módulo 11 DIAN)"},
     "invalid_dates": {"label": "Fechas inválidas", "group": "fechas", "severity": "error", "desc": "Detecta fechas imposibles (30 feb, año negativo, etc.)"},
     "date_range": {"label": "Rango temporal", "group": "fechas", "severity": "error", "desc": "Fechas fuera de época (<1900 o >hoy)"},
     "date_inconsistency": {"label": "Inconsistencia fechas", "group": "fechas", "severity": "error", "desc": "Relaciones temporales ilógicas entre pares de fechas"},
@@ -54,6 +56,8 @@ RULE_METADATA = {
     "similar_dob": {"label": "Fecha de nacimiento cercana", "group": "personas", "severity": "warning", "desc": "Detecta registros con fechas de nacimiento en ventana de ±3 días"},
     "person_composite_similarity": {"label": "Score compuesto de persona", "group": "personas", "severity": "warning", "desc": "Combina nombre+ID+DOB+dirección+teléfono en un score único para detectar la misma persona"},
     "personas_similares": {"label": "Buscar Persona", "group": "personas_similares", "severity": "warning", "desc": "Detecta personas potencialmente duplicadas combinando nombre, ID, fecha de nacimiento, dirección, teléfono y email (modos: rápido y profundo)"},
+    "personas_similares_v2": {"label": "Buscar Persona V2", "group": "personas_similares", "severity": "warning", "desc": "Compara las columnas que selecciones con pesos configurables para detectar la misma persona registrada dos veces con pequeñas diferencias (cédula con dígitos cambiados, mismo nombre, etc.)"},
+    "personas_similares_v3": {"label": "Buscar Persona V3 (Original)", "group": "personas_similares", "severity": "warning", "desc": "Reproduce el comportamiento original de personas similares: modo profundo con columnas de identificación, nombre y apellido para detectar la misma persona registrada dos veces con pequeñas diferencias"},
 }
 
 GROUP_METADATA = {

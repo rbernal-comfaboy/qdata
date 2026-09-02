@@ -29,6 +29,13 @@ export default function Analyze() {
   const [startError, setStartError] = useState('')
   const [similaresMode, setSimilaresMode] = useState<string>('rapido')
   const [similaresThreshold, setSimilaresThreshold] = useState<number>(80)
+  const [v2Mode, setV2Mode] = useState<string>('rapido')
+  const [v2Threshold, setV2Threshold] = useState<number>(80)
+  const [v2Columns, setV2Columns] = useState<string[]>([])
+  const [v2Weights, setV2Weights] = useState<Record<string, number>>({})
+  const [v3Mode, setV3Mode] = useState<string>('profundo')
+  const [v3Threshold, setV3Threshold] = useState<number>(90)
+  const [nitCheckDigit, setNitCheckDigit] = useState<boolean>(true)
   const [groupId, setGroupId] = useState('')
 
   const { data: rulesData } = useQuery({
@@ -51,6 +58,10 @@ export default function Analyze() {
   useEffect(() => {
     setSimilaresThreshold(similaresMode === 'profundo' ? 70 : 80)
   }, [similaresMode])
+
+  useEffect(() => {
+    setV3Threshold(v3Mode === 'profundo' ? 90 : 80)
+  }, [v3Mode])
 
   const { data: sources, isLoading } = useQuery({
     queryKey: ['sources'],
@@ -96,6 +107,31 @@ export default function Analyze() {
           columns: hasCols ? selectedColumns : undefined,
         }
       }
+      if (selectedRules.includes('personas_similares_v2')) {
+        const v2cols = v2Columns.length ? v2Columns : (previewData?.columns ?? [])
+        const v2w: Record<string, number> = {}
+        v2cols.forEach((c: string) => {
+          v2w[c] = (v2Weights[c] ?? guessV2Weight(c)) / 100
+        })
+        payload.rule_configs.personas_similares_v2 = {
+          mode: v2Mode,
+          threshold: v2Threshold / 100,
+          columns: v2cols,
+          weights: v2w,
+        }
+      }
+      if (selectedRules.includes('personas_similares_v3')) {
+        payload.rule_configs.personas_similares_v3 = {
+          mode: v3Mode,
+          threshold: v3Threshold / 100,
+          columns: hasCols ? selectedColumns : undefined,
+        }
+      }
+      if (selectedRules.includes('nit_valid')) {
+        payload.rule_configs.nit_valid = {
+          check_digit: nitCheckDigit,
+        }
+      }
       if (selectedRules.includes('duplicate_check') && hasCols) {
         payload.rule_configs.duplicate_check = {
           columns: selectedColumns,
@@ -127,6 +163,40 @@ export default function Analyze() {
     setSelectedRules((prev) =>
       prev.includes(ruleName) ? prev.filter((r) => r !== ruleName) : [...prev, ruleName]
     )
+    if (ruleName === 'personas_similares_v2') {
+      const cols = previewData?.columns?.length ? [...previewData.columns] : []
+      setV2Columns(cols)
+      const w: Record<string, number> = {}
+      cols.forEach((c: string) => { w[c] = guessV2Weight(c) })
+      setV2Weights(w)
+    }
+  }
+
+  const guessV2Weight = (col: string): number => {
+    const c = col.toLowerCase()
+    if (/cedula|identif|documento|nide|nuid|numdoc|nume|nudoc|_id$|^id$|perid|nit|rut|dni/.test(c)) return 30
+    if (/nombre|nomb|name|apellid|apel|surname/.test(c)) return 25
+    if (/fecha.{0,12}nac|nacimiento|birth|dob|fnac/.test(c)) return 15
+    if (/telef|phone|celu|movil|ntel|fijo/.test(c)) return 10
+    if (/email|correo|mail/.test(c)) return 10
+    return 10
+  }
+
+  const toggleV2Col = (c: string) => {
+    setV2Columns((prev) => prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c])
+  }
+
+  const toggleV2All = () => {
+    if (!previewData?.columns) return
+    if (v2Columns.length >= previewData.columns.length) {
+      setV2Columns([])
+    } else {
+      setV2Columns([...previewData.columns])
+    }
+  }
+
+  const setV2Weight = (c: string, val: number) => {
+    setV2Weights((prev) => ({ ...prev, [c]: val }))
   }
 
   const toggleExpand = (groupName: string) => {
@@ -341,6 +411,143 @@ export default function Analyze() {
                                   Menor = más estricto (menos resultados). Mayor = más permisivo (más hallazgos).
                                 </p>
                               </>
+                            )}
+                            {rule.name === 'personas_similares_v2' && selectedRules.includes('personas_similares_v2') && (
+                              <>
+                                <div className="flex flex-wrap gap-1.5 mt-1 mb-1.5">
+                                  <button type="button"
+                                    onClick={() => setV2Mode('rapido')}
+                                    className={`text-[11px] px-3 py-1 rounded-full border font-medium transition-colors ${
+                                      v2Mode === 'rapido'
+                                        ? 'bg-green-500/20 border-green-500/40 text-green-300'
+                                        : 'border-white/15 text-muted hover:border-white/30'
+                                    }`}>
+                                    ⚡ Búsqueda Rápida
+                                  </button>
+                                  <button type="button"
+                                    onClick={() => setV2Mode('profundo')}
+                                    className={`text-[11px] px-3 py-1 rounded-full border font-medium transition-colors ${
+                                      v2Mode === 'profundo'
+                                        ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                                        : 'border-white/15 text-muted hover:border-white/30'
+                                    }`}>
+                                    🧠 Búsqueda Profunda
+                                  </button>
+                                </div>
+                                <div className="flex items-center gap-3 mt-1 mb-1.5 px-1">
+                                  <label className="text-[10px] text-muted whitespace-nowrap">Sensibilidad</label>
+                                  <input
+                                    type="range"
+                                    min={50}
+                                    max={95}
+                                    step={1}
+                                    value={v2Threshold}
+                                    onChange={(e) => setV2Threshold(Number(e.target.value))}
+                                    className="flex-1 h-1 accent-indigo-500 cursor-pointer"
+                                  />
+                                  <span className="text-[11px] font-mono text-white/80 w-8 text-right">{v2Threshold}%</span>
+                                </div>
+                                {previewData?.columns?.length ? (
+                                  <div className="mt-1 mb-1 px-1">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-[10px] text-muted font-semibold">Campos a comparar ({v2Columns.length}/{previewData.columns.length})</span>
+                                      <button type="button" onClick={toggleV2All}
+                                        className="text-[9px] text-indigo-400 hover:text-indigo-300">
+                                        {v2Columns.length >= previewData.columns.length ? 'Ninguno' : 'Todos'}
+                                      </button>
+                                    </div>
+                                    <div className="max-h-36 overflow-y-auto rounded-lg border border-white/10 bg-black/20 p-1.5 space-y-2">
+                                      {previewData.columns.map((c: string) => (
+                                        <div key={c} className="flex items-center gap-2">
+                                          <input type="checkbox" checked={v2Columns.includes(c)}
+                                            onChange={() => toggleV2Col(c)}
+                                            className="w-3 h-3 rounded accent-indigo-500 shrink-0" />
+                                          <span className="text-[10px] text-white/70 truncate flex-1">{c}</span>
+                                          <input
+                                            type="range" min={0} max={100} step={5}
+                                            value={v2Weights[c] ?? guessV2Weight(c)}
+                                            onChange={(e) => setV2Weight(c, Number(e.target.value))}
+                                            className="w-16 h-1 accent-indigo-500 cursor-pointer shrink-0"
+                                            title={`Peso de ${c}`}
+                                          />
+                                          <span className="text-[9px] font-mono text-white/60 w-8 text-right">
+                                            {v2Weights[c] ?? guessV2Weight(c)}%
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                    <p className="text-[9px] text-muted/60 mt-1">
+                                      El peso define la importancia de cada campo en el score de similitud.
+                                    </p>
+                                  </div>
+                                ) : null}
+                              </>
+                            )}
+                            {rule.name === 'personas_similares_v3' && selectedRules.includes('personas_similares_v3') && (
+                              <>
+                                <div className="flex flex-wrap gap-1.5 mt-1 mb-1.5">
+                                  <button type="button"
+                                    onClick={() => setV3Mode('rapido')}
+                                    className={`text-[11px] px-3 py-1 rounded-full border font-medium transition-colors ${
+                                      v3Mode === 'rapido'
+                                        ? 'bg-green-500/20 border-green-500/40 text-green-300'
+                                        : 'border-white/15 text-muted hover:border-white/30'
+                                    }`}>
+                                    ⚡ Búsqueda Rápida
+                                  </button>
+                                  <button type="button"
+                                    onClick={() => setV3Mode('profundo')}
+                                    className={`text-[11px] px-3 py-1 rounded-full border font-medium transition-colors ${
+                                      v3Mode === 'profundo'
+                                        ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                                        : 'border-white/15 text-muted hover:border-white/30'
+                                    }`}>
+                                    🧠 Búsqueda Profunda
+                                  </button>
+                                </div>
+                                <div className="flex items-center gap-3 mt-1 mb-1.5 px-1">
+                                  <label className="text-[10px] text-muted whitespace-nowrap">Sensibilidad</label>
+                                  <input
+                                    type="range"
+                                    min={50}
+                                    max={95}
+                                    step={1}
+                                    value={v3Threshold}
+                                    onChange={(e) => setV3Threshold(Number(e.target.value))}
+                                    className="flex-1 h-1 accent-indigo-500 cursor-pointer"
+                                  />
+                                  <span className="text-[11px] font-mono text-white/80 w-8 text-right">{v3Threshold}%</span>
+                                </div>
+                                <p className="text-[9px] text-muted/60 px-1 -mt-1 mb-1">
+                                  Menor = más estricto (menos resultados). Mayor = más permisivo (más hallazgos). Reproduce el análisis original de julio (profundo, 90%).
+                                </p>
+                              </>
+                            )}
+                            {rule.name === 'nit_valid' && selectedRules.includes('nit_valid') && (
+                              <div className="flex flex-wrap gap-1.5 mt-1 mb-1.5 items-center px-1">
+                                <span className="text-[10px] text-muted whitespace-nowrap">Dígito de verificación</span>
+                                <button type="button"
+                                  onClick={() => setNitCheckDigit(true)}
+                                  className={`text-[11px] px-3 py-1 rounded-full border font-medium transition-colors ${
+                                    nitCheckDigit
+                                      ? 'bg-green-500/20 border-green-500/40 text-green-300'
+                                      : 'border-white/15 text-muted hover:border-white/30'
+                                  }`}>
+                                  Sí
+                                </button>
+                                <button type="button"
+                                  onClick={() => setNitCheckDigit(false)}
+                                  className={`text-[11px] px-3 py-1 rounded-full border font-medium transition-colors ${
+                                    !nitCheckDigit
+                                      ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                                      : 'border-white/15 text-muted hover:border-white/30'
+                                  }`}>
+                                  No
+                                </button>
+                                <p className="text-[9px] text-muted/60 w-full -mt-0.5">
+                                  Con "Sí" se valida el DV (Módulo 11 DIAN) contra la columna de dígito de verificación de la fuente (p.ej. perDigitoVerificacion) o contra el DV con guion del NIT. Sin DV (columna ausente o vacía) el valor no se marca como error.
+                                </p>
+                              </div>
                             )}
                           </div>
                         ))}

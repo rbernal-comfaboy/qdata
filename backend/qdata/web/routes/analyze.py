@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 import math
+import re
 import threading
 from decimal import Decimal
 from functools import partial
@@ -22,8 +23,15 @@ from qdata.core.score import build_recommendations, calculate_score
 from qdata.db.models import Project, Report, Source, DataSource, User
 from qdata.db.session import async_session_factory, get_session
 from qdata.rules.base import RuleResult
+from qdata.rules.person_fields import email_columns, identity_field_columns, phone_columns
 
 router = APIRouter()
+
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
+
+
+def _clean_str(s: str) -> str:
+    return _CONTROL_RE.sub("", s)
 
 
 def _safe_val(v: Any) -> Any:
@@ -45,7 +53,7 @@ def _safe_val(v: Any) -> Any:
     if isinstance(v, bytes):
         return v.decode("utf-8", errors="replace")
     if isinstance(v, str):
-        return v
+        return _clean_str(v)
     if isinstance(v, dict):
         return {k: _safe_val(v) for k, v in v.items()}
     if isinstance(v, (list, tuple)):
@@ -65,6 +73,72 @@ def _safe_val(v: Any) -> Any:
         return v
     except (TypeError, OverflowError):
         return str(v)
+
+
+def _row_dict(df: pd.DataFrame, idx: int) -> dict | None:
+    """Return the full row for a given index (all source columns), or None."""
+    if idx not in df.index:
+        return None
+    row = df.loc[idx]
+    return {col: (v.item() if hasattr(v, "item") else v) for col, v in row.items()}
+
+
+def _enrich_full_rows(results: list[RuleResult], full_df: pd.DataFrame) -> None:
+    """Attach per-row values to sample_failures using the full source DataFrame.
+
+    duplicate_check sample_failures are per-row and get identity + contact
+    values; its 'duplicate_groups' detail rows get identity + contact values
+    too so the 'Registros duplicados' table shows the person and the contact.
+    The contact columns are the phone columns for phone projects (a phone_check
+    rule is present) and the email columns for email projects, mirroring what
+    the UI shows. Other rules keep full-row values when they ran on a column
+    subset."""
+    if full_df is None or len(full_df.columns) == 0:
+        return
+    id_cols = identity_field_columns(full_df.columns)
+    if any(r.rule_name == "phone_check" for r in results):
+        contact_cols = phone_columns(full_df.columns)
+    elif any(r.rule_name == "email_check" for r in results):
+        contact_cols = email_columns(full_df.columns)
+    else:
+        contact_cols = []
+    df_keep = full_df[id_cols + [c for c in contact_cols if c not in id_cols]] if id_cols else None
+
+    def _subset(row_df: pd.DataFrame, idx: int) -> dict | None:
+        if row_df is None or idx not in row_df.index:
+            return None
+        row = row_df.loc[idx]
+        return {col: (v.item() if hasattr(v, "item") else v) for col, v in row.items()}
+
+    for r in results:
+        if r.rule_name == "duplicate_check":
+            detail = next((d for d in (r.details or []) if d.get("type") == "duplicate_groups"), None)
+            if detail is not None:
+                for g in detail.get("groups") or []:
+                    for m in g.get("rows") or []:
+                        if isinstance(m, dict) and m.get("row") is not None:
+                            v = _subset(df_keep, m["row"]) if df_keep is not None else _row_dict(full_df, m["row"])
+                            if v:
+                                m["values"] = v
+            for sf in r.sample_failures or []:
+                if isinstance(sf, dict) and sf.get("row") is not None:
+                    v = _subset(df_keep, sf["row"]) if df_keep is not None else _row_dict(full_df, sf["row"])
+                    if v:
+                        sf["values"] = v
+            continue
+        for sf in r.sample_failures or []:
+            if not isinstance(sf, dict):
+                continue
+            if isinstance(sf.get("rows"), list):
+                for m in sf["rows"]:
+                    if isinstance(m, dict) and m.get("row") is not None:
+                        v = _row_dict(full_df, m["row"])
+                        if v:
+                            m["values"] = v
+            elif sf.get("row") is not None:
+                v = _row_dict(full_df, sf["row"])
+                if v:
+                    sf["values"] = v
 
 
 class AnalyzeRequest(BaseModel):
@@ -87,6 +161,27 @@ class AnalyzeResponse(BaseModel):
     label: str
     rules_count: int
     recommendations: list[dict]
+
+
+def _sync_load_and_run(st, cs, q, fp, kwargs, req_columns, sel_columns, rules_cfg, rule_configs):
+    df = load_data(st, cs, q, fp, **kwargs)
+    if df.empty:
+        return None, "No data loaded"
+    full_df = df
+    if req_columns:
+        missing = [c for c in req_columns if c not in df.columns]
+        if missing:
+            return None, f"Columns not found: {missing}"
+        df = df[[c for c in req_columns if c in df.columns]]
+    elif sel_columns:
+        sel = [c for c in sel_columns if c in df.columns]
+        if sel:
+            df = df[sel]
+    engine = Engine(parallel=False)
+    rules = resolve_rules(rules_cfg, rule_configs)
+    results = asyncio.run(engine.run(df, rules))
+    _enrich_full_rows(results, full_df)
+    return results, None
 
 
 @router.post("/", response_model=AnalyzeResponse)
@@ -115,32 +210,27 @@ async def run_analysis(
         q = s.query or ""
         fp = ds.file_path or ""
 
+    kwargs = {}
+    if req.source_id and s.row_limit:
+        kwargs["nrows"] = s.row_limit
+    if req.source_id:
+        kwargs["storage_mode"] = s.storage_mode or "memory"
+
+    loop = asyncio.get_running_loop()
     try:
-        kwargs = {}
-        if req.source_id and s.row_limit:
-            kwargs["nrows"] = s.row_limit
-        if req.source_id:
-            kwargs["storage_mode"] = s.storage_mode or "memory"
-        df = load_data(st, cs, q, fp, **kwargs)
+        results, err = await loop.run_in_executor(
+            None,
+            _sync_load_and_run,
+            st, cs, q, fp, kwargs,
+            req.columns,
+            s.selected_columns if req.source_id else None,
+            req.rules,
+            req.rule_configs,
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error loading data: {e}")
-
-    if df.empty:
-        raise HTTPException(status_code=400, detail="No data loaded")
-
-    if req.columns:
-        missing = [c for c in req.columns if c not in df.columns]
-        if missing:
-            raise HTTPException(status_code=400, detail=f"Columns not found: {missing}")
-        df = df[[c for c in req.columns if c in df.columns]]
-    elif req.source_id and s.selected_columns:
-        sel = [c for c in s.selected_columns if c in df.columns]
-        if sel:
-            df = df[sel]
-
-    engine = Engine(parallel=False)
-    rules = resolve_rules(req.rules, req.rule_configs)
-    results = await engine.run(df, rules)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
 
     score, label = calculate_score(results)
     recommendations = build_recommendations(results)
@@ -164,6 +254,7 @@ async def run_analysis(
         name=req.project_name,
         source_config=source_config,
         rules_config=req.rules,
+        rule_configs=req.rule_configs,
         status="completed",
     )
     session.add(project)
@@ -178,6 +269,16 @@ async def run_analysis(
             "results": [r.__dict__ for r in results],
             "recommendations": recommendations,
         }),
+        rule_totals=_safe_val([
+            {
+                "rule_name": r.rule_name,
+                "passed": bool(r.passed),
+                "failed": r.failed,
+                "total": r.total,
+                "severity": r.severity,
+            }
+            for r in results
+        ]),
         recommendations=recommendations,
         summary=f"Score: {score}/100 ({label}). Reglas ejecutadas: {len(results)}. Duración: {total_duration}ms.",
     )
@@ -321,6 +422,7 @@ async def load_and_analyze_background(
                 await session.commit()
                 return
 
+            full_df = df
             if columns:
                 missing = [c for c in columns if c not in df.columns]
                 if missing:
@@ -366,6 +468,7 @@ async def load_and_analyze_background(
         rules_config=rules_config,
         user_id=user_id,
         rule_configs=rule_configs,
+        full_df=full_df,
     )
 
 
@@ -375,6 +478,7 @@ async def run_analysis_background(
     rules_config: list[str] | str,
     user_id: Any,
     rule_configs: dict[str, dict] | None = None,
+    full_df: pd.DataFrame | None = None,
 ):
     """Background task: runs rules sequentially, updates progress after each rule.
 
@@ -643,11 +747,23 @@ async def run_analysis_background(
                 total_duration = round((time.perf_counter() - total_start) * 1000, 2)
                 score, label = calculate_score(results)
                 recommendations = build_recommendations(results)
+                if full_df is not None:
+                    _enrich_full_rows(results, full_df)
                 safe_results = _safe_val({"results": [r.__dict__ for r in results], "recommendations": recommendations})
                 report = Report(
                     project_id=project.id, user_id=user_id,
                     score=score, label=label,
                     result_json=safe_results,
+                    rule_totals=_safe_val([
+                        {
+                            "rule_name": r.rule_name,
+                            "passed": bool(r.passed),
+                            "failed": r.failed,
+                            "total": r.total,
+                            "severity": r.severity,
+                        }
+                        for r in results
+                    ]),
                     recommendations=recommendations,
                     summary=f"Score: {score}/100 ({label}). Reglas ejecutadas: {len(results)}. Duración: {total_duration}ms.",
                 )
@@ -731,6 +847,7 @@ async def start_analysis(
         name=req.project_name or f"Análisis",
         source_config=source_config,
         rules_config=req.rules,
+        rule_configs=req.rule_configs,
         status="loading",
         progress={
             "total": 0,

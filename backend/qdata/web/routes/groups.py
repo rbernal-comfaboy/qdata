@@ -3,8 +3,9 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, func, or_, literal_column
+from sqlalchemy import select, func, or_, literal_column, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from qdata.db.models import AnalysisGroup, GroupPermission, Project, Report
 from qdata.db.session import get_session
@@ -70,17 +71,53 @@ async def list_groups(
     )
 
     result = await session.execute(
-        base_q.column(subq_proj_count.label("project_count"))
-        .column(subq_report_count.label("report_count"))
-        .column(subq_last_report.label("last_analysis"))
-        .column(subq_avg_score.label("avg_score"))
-        .order_by(AnalysisGroup.created_at.desc())
+        base_q.add_columns(
+            subq_proj_count.label("project_count"),
+            subq_report_count.label("report_count"),
+            subq_last_report.label("last_analysis"),
+            subq_avg_score.label("avg_score"),
+        ).order_by(AnalysisGroup.created_at.desc())
     )
     rows = result.all()
+
+    group_ids = [str(r[0].id) for r in rows]
+    errors_map: dict[str, dict] = {}
+
+    if group_ids:
+        try:
+            uuid_list = ", ".join(f"'{gid}'::uuid" for gid in group_ids)
+            agg_sql = text(f"""
+                WITH latest AS (
+                    SELECT DISTINCT ON (r.project_id)
+                        r.project_id,
+                        COALESCE(r.rule_totals::jsonb, r.result_json::jsonb->'results') AS rule_data,
+                        p.group_id
+                    FROM reports r
+                    JOIN projects p ON r.project_id = p.id
+                    WHERE p.group_id IN ({uuid_list}) AND r.result_json IS NOT NULL
+                    ORDER BY r.project_id, r.executed_at DESC
+                )
+                SELECT
+                    l.group_id::text,
+                    COALESCE(SUM((rule.value->>'failed')::int), 0) AS total_errors,
+                    COALESCE(SUM((rule.value->>'total')::int), 0) AS total_records
+                FROM latest l
+                CROSS JOIN LATERAL jsonb_array_elements(l.rule_data) AS rule
+                GROUP BY l.group_id
+            """)
+            agg_result = await session.execute(agg_sql)
+            for row in agg_result.all():
+                errors_map[str(row[0])] = {
+                    "total_errors": row[1] or 0,
+                    "total_records": row[2] or 0,
+                }
+        except Exception:
+            pass
 
     out = []
     for row in rows:
         g = row[0]
+        gid = str(g.id)
         pcount = row[1] or 0
         rcount = row[2] or 0
         last = row[3]
@@ -97,9 +134,10 @@ async def list_groups(
                 score_label = "critico"
         else:
             score_label = None
+        e = errors_map.get(gid, {"total_errors": 0, "total_records": 0})
 
         out.append({
-            "id": str(g.id),
+            "id": gid,
             "name": g.name,
             "description": g.description,
             "color": g.color,
@@ -109,6 +147,8 @@ async def list_groups(
             "created_at": g.created_at.isoformat() if g.created_at else None,
             "avg_score": avg_score,
             "score_label": score_label,
+            "total_errors": e["total_errors"],
+            "total_records": e["total_records"],
         })
     return out
 
@@ -186,17 +226,16 @@ async def group_dashboard(
         raise HTTPException(404, "Grupo no encontrado")
 
     subq_latest = (
-        select(Report.project_id, Report.id.label("report_id"))
+        select(Report.id.label("report_id"))
         .where(Report.project_id == Project.id)
         .correlate(Project)
         .order_by(Report.executed_at.desc())
         .limit(1)
-        .subquery()
+        .scalar_subquery()
     )
 
     proj_result = await session.execute(
-        select(Project, subq_latest.c.report_id)
-        .outerjoin(subq_latest, Project.id == subq_latest.c.project_id)
+        select(Project, subq_latest)
         .where(Project.group_id == group_id)
         .order_by(Project.created_at.desc())
     )
@@ -212,7 +251,7 @@ async def group_dashboard(
         latest_report_ids = [r[1] for r in project_rows if r[1] is not None]
         if latest_report_ids:
             reports_result = await session.execute(
-                select(Report).where(Report.id.in_(latest_report_ids))
+                select(Report).options(defer(Report.result_json)).where(Report.id.in_(latest_report_ids))
             )
             reports_map = {str(r.id): r for r in reports_result.scalars().all()}
         else:
@@ -224,8 +263,8 @@ async def group_dashboard(
                 report_ids.append(str(rep.id))
                 if rep.score is not None:
                     project_scores.append({"name": proj.name, "score": rep.score, "date": rep.executed_at.isoformat() if rep.executed_at else None})
-                result_json = rep.result_json or {}
-                for rule in result_json.get("results", []):
+                rule_list = rep.rule_totals or []
+                for rule in rule_list:
                     rn = rule.get("rule_name", "unknown")
                     if rn not in rule_stats:
                         rule_stats[rn] = {"passed": 0, "failed": 0, "total": 0}

@@ -303,7 +303,7 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
       {% endif %}
       {% if dets.errors %}
       <table>
-        <tr><th>#</th><th>Fila</th><th>Columna</th><th>Valor</th><th>Descripción</th><th>Sugerencia</th></tr>
+        <tr><th>#</th><th>Fila</th><th>Columna</th><th>Valor</th><th>Descripción</th><th>Sugerencia</th><th>Qué hacer</th></tr>
         {% for e in dets.errors %}
         <tr>
           <td>{{ e.idx }}</td>
@@ -312,12 +312,28 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
           <td style="max-width:200px;word-break:break-all">{{ e.valor }}</td>
           <td>{{ e.descripcion }}</td>
           <td>{{ e.sugerencia }}</td>
+          <td>{{ e.que_hacer }}</td>
         </tr>
         {% endfor %}
       </table>
       {% endif %}
     </div>
     {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if glossary %}
+  <div class="section">
+    <h2>Glosario de Reglas</h2>
+    <table>
+      <tr><th>Regla</th><th>¿Qué hace?</th></tr>
+      {% for rname, desc in glossary.items() %}
+      <tr>
+        <td>{{ rname }}</td>
+        <td>{{ desc }}</td>
+      </tr>
+      {% endfor %}
+    </table>
   </div>
   {% endif %}
 
@@ -334,28 +350,70 @@ def generate_pdf_html(
     recommendations: list[dict],
     summary: str = "",
 ) -> str:
-    from qdata.core.descriptions import describe_detail, describe_error
+    from qdata.core.descriptions import describe_detail, describe_error, duplicate_groups, GLOSARIO, RULE_DISPLAY_NAMES
+
+    def _clean_unnamed(vals: dict) -> dict:
+        return {k: v for k, v in vals.items() if not k.startswith("Unnamed:")}
 
     details = {}
+    MAX_HTML_GROUPS = 12
     for r in results:
         rname = r.get("rule_name", "desconocida")
+        dname = RULE_DISPLAY_NAMES.get(rname, rname)
         rec = r.get("recommendation")
         summary_lines = []
         for d in r.get("details") or []:
             summary_lines.append(describe_detail(rname, d))
         error_rows = []
-        for i, sf in enumerate(r.get("sample_failures") or []):
-            info = describe_error(rname, sf, rec)
-            error_rows.append({
-                "idx": i + 1,
-                "fila": info.get("fila") or "—",
-                "columna": info.get("columna") or "—",
-                "valor": info.get("valor") or "—",
-                "descripcion": info.get("descripcion") or "",
-                "sugerencia": info.get("sugerencia") or "",
-            })
+        sample_failures = r.get("sample_failures") or []
+
+        if rname == "duplicate_check":
+            groups = duplicate_groups(r)
+            displayed = groups[:MAX_HTML_GROUPS]
+            hidden_count = len(groups) - len(displayed)
+            hidden_rows = sum(g["size"] for g in groups[MAX_HTML_GROUPS:])
+            if hidden_count > 0:
+                summary_lines.append(f"+{hidden_count} grupos más ({hidden_rows} filas) no mostrados")
+            for gi, g in enumerate(displayed, 1):
+                item = g
+                info = describe_error(rname, item, rec)
+                first = (g["rows"] or [{}])[0]
+                vals = _clean_unnamed(first.get("values") or {})
+                val_str = ", ".join(f"{k}={v}" for k, v in list(vals.items())[:4])
+                error_rows.append({
+                    "idx": gi,
+                    "fila": f"{g['size']} filas",
+                    "columna": "",
+                    "valor": val_str,
+                    "descripcion": info.get("descripcion") or "",
+                    "sugerencia": info.get("sugerencia") or "",
+                    "que_hacer": info.get("que_hacer") or "",
+                })
+        else:
+            for i, sf in enumerate(sample_failures):
+                info = describe_error(rname, sf, rec)
+                vals_raw = sf.get("values", {})
+                vals_clean = _clean_unnamed(vals_raw)
+                val_display = info.get("valor") or ""
+                if not val_display and vals_clean:
+                    val_display = ", ".join(f"{k}={v}" for k, v in list(vals_clean.items())[:3])
+                error_rows.append({
+                    "idx": i + 1,
+                    "fila": info.get("fila") or "—",
+                    "columna": info.get("columna") or "—",
+                    "valor": val_display,
+                    "descripcion": info.get("descripcion") or "",
+                    "sugerencia": info.get("sugerencia") or "",
+                    "que_hacer": info.get("que_hacer") or "",
+                })
         if summary_lines or error_rows:
-            details[rname] = {"summary": summary_lines, "errors": error_rows}
+            details[dname] = {"summary": summary_lines, "errors": error_rows}
+
+    glossary = {}
+    for r in results:
+        rname = r.get("rule_name", "")
+        if rname and rname in GLOSARIO:
+            glossary[RULE_DISPLAY_NAMES.get(rname, rname)] = GLOSARIO[rname]
 
     from jinja2 import Environment, BaseLoader
     env = Environment(loader=BaseLoader(), autoescape=False)
@@ -366,7 +424,8 @@ def generate_pdf_html(
         results=results,
         recommendations=recommendations,
         details=details,
-        summary=summary or f"Score de calidad: {score}/100 - {label.upper()}. Se ejecutaron {len(results)} reglas de validación.",
+        glossary=glossary,
+        summary=summary or _summary_text(results, score),
         generated_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
     )
 
@@ -380,6 +439,26 @@ def _pdf_text(text: str | int | float | None) -> str:
                .replace("\u2026", "...").replace("\u2022", "*")
 
 
+def _summary_text(results: list[dict], score: int) -> str:
+    from qdata.core.descriptions import RULE_DISPLAY_NAMES
+    total = len(results)
+    total_records = max((r.get("total", 0) for r in results), default=0)
+    total_errors = sum(r.get("failed", 0) for r in results)
+    failed_rules = [r for r in results if not r.get("pass", r.get("passed", False))]
+    findings = []
+    for r in sorted(failed_rules, key=lambda x: x.get("failed", 0), reverse=True)[:3]:
+        dname = RULE_DISPLAY_NAMES.get(r.get("rule_name", ""), r.get("rule_name", ""))
+        findings.append(f"{dname} ({r.get('failed', 0):,})")
+    clean_pct = round((total_records - total_errors) / total_records * 100) if total_records > 0 else 0
+    lines = [
+        f"Se revisaron {total_records:,} registros. Encontramos {total_errors:,} errores en {len(failed_rules)} de {total} reglas."
+    ]
+    if findings:
+        lines.append(f"Principales problemas: {', '.join(findings)}.")
+    lines.append(f"El {clean_pct}% de los datos está correcto.")
+    return " ".join(lines)
+
+
 def generate_pdf(
     results: list[dict],
     score: int,
@@ -387,29 +466,71 @@ def generate_pdf(
     recommendations: list[dict],
     summary: str = "",
 ) -> bytes:
-    from qdata.core.descriptions import describe_detail, describe_error
+    from qdata.core.descriptions import describe_detail, describe_error, duplicate_groups, describe_rule_simple, GLOSARIO, QUE_HACER, RULE_DISPLAY_NAMES, severity_description
     from fpdf import FPDF
 
+    def _clean_unnamed(vals: dict) -> dict:
+        return {k: v for k, v in vals.items() if not k.startswith("Unnamed:")}
+
     details = {}
+    MAX_PDF_GROUPS = 12
+
     for r in results:
         rname = r.get("rule_name", "desconocida")
+        dname = RULE_DISPLAY_NAMES.get(rname, rname)
         rec = r.get("recommendation")
         summary_lines = []
         for d in r.get("details") or []:
             summary_lines.append(describe_detail(rname, d))
         error_rows = []
-        for i, sf in enumerate(r.get("sample_failures") or []):
-            info = describe_error(rname, sf, rec)
-            error_rows.append({
-                "idx": i + 1,
-                "fila": _pdf_text(info.get("fila") or "-"),
-                "columna": _pdf_text(info.get("columna") or "-"),
-                "valor": _pdf_text(info.get("valor") or "-"),
-                "descripcion": _pdf_text(info.get("descripcion") or ""),
-                "sugerencia": _pdf_text(info.get("sugerencia") or ""),
-            })
+
+        sample_failures = r.get("sample_failures") or []
+
+        if rname == "duplicate_check":
+            groups = duplicate_groups(r)
+            displayed = groups[:MAX_PDF_GROUPS]
+            hidden_count = len(groups) - len(displayed)
+            hidden_rows = sum(g["size"] for g in groups[MAX_PDF_GROUPS:])
+
+            if hidden_count > 0:
+                summary_lines.append(f"+{hidden_count} grupos más ({hidden_rows} filas) no mostrados")
+
+            for gi, g in enumerate(displayed, 1):
+                item = g
+                info = describe_error(rname, item, rec)
+                first = (g["rows"] or [{}])[0]
+                vals = _clean_unnamed(first.get("values") or {})
+                val_str = ", ".join(f"{k}={v}" for k, v in list(vals.items())[:4])
+                row_nums = [str(rr["row"] + 2) for rr in (g["rows"] or []) if rr.get("row") is not None]
+                error_rows.append({
+                    "idx": gi,
+                    "fila": ", ".join(row_nums[:6]) + ("..." if len(row_nums) > 6 else ""),
+                    "columna": "",
+                    "valor": _pdf_text(val_str),
+                    "descripcion": f"Grupo de {g['size']} filas repetidas: {_pdf_text(info.get('descripcion') or '')}",
+                    "sugerencia": "",
+                    "que_hacer": _pdf_text(info.get("que_hacer") or ""),
+                    "size": g["size"],
+                })
+        else:
+            for i, sf in enumerate(sample_failures):
+                info = describe_error(rname, sf, rec)
+                vals_raw = sf.get("values", {})
+                vals_clean = _clean_unnamed(vals_raw)
+                val_display = info.get("valor") or ""
+                if not val_display and vals_clean:
+                    val_display = ", ".join(f"{k}={v}" for k, v in list(vals_clean.items())[:3])
+                error_rows.append({
+                    "idx": i + 1,
+                    "fila": _pdf_text(info.get("fila") or "-"),
+                    "columna": _pdf_text(info.get("columna") or "-"),
+                    "valor": _pdf_text(val_display),
+                    "descripcion": _pdf_text(info.get("descripcion") or ""),
+                    "sugerencia": _pdf_text(info.get("sugerencia") or ""),
+                    "que_hacer": _pdf_text(info.get("que_hacer") or ""),
+                })
         if summary_lines or error_rows:
-            details[rname] = {"summary": [_pdf_text(s) for s in summary_lines], "errors": error_rows}
+            details[dname] = {"summary": [_pdf_text(s) for s in summary_lines], "errors": error_rows, "rule_name": rname, "display_name": dname}
 
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=20)
@@ -466,7 +587,7 @@ def generate_pdf(
         pdf.set_xy(margin, pdf.get_y() + 2)
         pdf.set_text_color(230, 230, 255)
         pdf.set_font("Helvetica", "", 9)
-        pdf.multi_cell(inner_w, 5, _pdf_text(summary) or f"Score de calidad: {score}/100 - {label_upper}. Se ejecutaron {len(results)} reglas de validación.")
+        pdf.multi_cell(inner_w, 5, _pdf_text(summary) or _summary_text(results, score))
 
     header_block()
 
@@ -662,9 +783,9 @@ def generate_pdf(
                 if pdf.get_y() > 250:
                     pdf.add_page()
                 pdf.ln(2)
-                err_cols = [8, 14, 22, 36, 50, 50]
-                err_headers = ["#", "Fila", "Columna", "Valor", "Descripción", "Sugerencia"]
-                pdf.set_font("Helvetica", "B", 7)
+                err_cols = [6, 10, 14, 20, 36, 28, 46]
+                err_headers = ["#", "Fila", "Columna", "Valor", "Descripción", "Sugerencia", "Qué hacer"]
+                pdf.set_font("Helvetica", "B", 6.5)
                 pdf.set_fill_color(248, 250, 252)
                 pdf.set_text_color(71, 85, 105)
                 x0 = margin
@@ -677,7 +798,7 @@ def generate_pdf(
                 for e in dets["errors"]:
                     if pdf.get_y() > 270:
                         pdf.add_page()
-                        pdf.set_font("Helvetica", "B", 7)
+                        pdf.set_font("Helvetica", "B", 6.5)
                         pdf.set_fill_color(248, 250, 252)
                         pdf.set_text_color(71, 85, 105)
                         for j, (h, cw) in enumerate(zip(err_headers, err_cols)):
@@ -686,15 +807,16 @@ def generate_pdf(
                             pdf.cell(cw, 6, f" {h}", border=1, fill=True)
                         pdf.set_xy(x0, pdf.get_y() + 6)
 
-                    pdf.set_font("Helvetica", "", 7)
+                    pdf.set_font("Helvetica", "", 6.5)
                     pdf.set_text_color(51, 51, 51)
                     vals = [
                         str(e.get("idx", "")),
                         str(e.get("fila", "")),
                         str(e.get("columna", "")),
-                        str(e.get("valor", ""))[:50],
-                        str(e.get("descripcion", ""))[:60],
-                        str(e.get("sugerencia", ""))[:60],
+                        str(e.get("valor", ""))[:28],
+                        str(e.get("descripcion", ""))[:50],
+                        str(e.get("sugerencia", ""))[:40],
+                        str(e.get("que_hacer", ""))[:55],
                     ]
                     for j, (v, cw) in enumerate(zip(vals, err_cols)):
                         x = x0 + sum(err_cols[:j])
@@ -703,6 +825,44 @@ def generate_pdf(
                     pdf.set_xy(x0, pdf.get_y() + 5)
 
             pdf.ln(4)
+
+    # Glossary
+    rule_names_in_report = {r.get("rule_name", "") for r in results if r.get("rule_name")}
+    if rule_names_in_report:
+        if pdf.get_y() > 220:
+            pdf.add_page()
+        section_title("Glosario de Reglas")
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_fill_color(248, 250, 252)
+        pdf.set_text_color(71, 85, 105)
+        gl_cols = [60, 110]
+        gl_headers = ["Regla", "¿Qué hace?"]
+        x0 = margin
+        for j, (h, cw) in enumerate(zip(gl_headers, gl_cols)):
+            x = x0 + sum(gl_cols[:j])
+            pdf.set_xy(x, pdf.get_y())
+            pdf.cell(cw, 6, f" {h}", border=1, fill=True)
+        pdf.set_xy(x0, pdf.get_y() + 6)
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(51, 51, 51)
+        for rname in sorted(rule_names_in_report):
+            if rname in GLOSARIO:
+                if pdf.get_y() > 270:
+                    pdf.add_page()
+                    pdf.set_font("Helvetica", "B", 8)
+                    pdf.set_fill_color(248, 250, 252)
+                    pdf.set_text_color(71, 85, 105)
+                    for j, (h, cw) in enumerate(zip(gl_headers, gl_cols)):
+                        x = x0 + sum(gl_cols[:j])
+                        pdf.set_xy(x, pdf.get_y())
+                        pdf.cell(cw, 6, f" {h}", border=1, fill=True)
+                    pdf.set_xy(x0, pdf.get_y() + 6)
+                    pdf.set_font("Helvetica", "", 7)
+                    pdf.set_text_color(51, 51, 51)
+                dname = RULE_DISPLAY_NAMES.get(rname, rname)
+                pdf.cell(gl_cols[0], 5, f" {dname}", border=1)
+                pdf.cell(gl_cols[1], 5, f" {GLOSARIO[rname]}", border=1)
+                pdf.ln()
 
     pdf.set_y(-20)
     pdf.set_font("Helvetica", "I", 8)

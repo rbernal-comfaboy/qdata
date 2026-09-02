@@ -72,6 +72,8 @@ function DetailsTable({ details }: { details: any[] }) {
 const GROUP_RULE_TYPES: Record<string, string> = {
   person_composite_similarity: 'person_composite_groups',
   personas_similares: 'personas_similares_groups',
+  personas_similares_v2: 'personas_similares_v2_groups',
+  personas_similares_v3: 'personas_similares_groups',
   fuzzy_name_match: 'fuzzy_name_groups',
   fuzzy_id_match: 'fuzzy_id_groups',
   similar_dob: 'similar_dob_groups',

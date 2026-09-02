@@ -2,7 +2,7 @@ import textwrap
 
 import pandas as pd
 
-from qdata.rules.base import Rule, RuleResult
+from qdata.rules.base import MAX_SAMPLE_FAILURES, Rule, RuleResult
 
 
 class CustomSQLRule(Rule):
@@ -41,7 +41,7 @@ class CustomSQLRule(Rule):
             failed=failed,
             failure_pct=round(failed / len(df) * 100, 2) if len(df) else 0,
             details=[{"sql": self._sql, "failed_rows": failed}],
-            sample_failures=result.to_dict("records") if failed else [],
+            sample_failures=result.to_dict("records")[:MAX_SAMPLE_FAILURES] if failed else [],
             recommendation=recommendation,
         )
 
@@ -93,6 +93,6 @@ class CustomPythonRule(Rule):
             failed=failed,
             failure_pct=round(failed / len(df) * 100, 2) if len(df) else 0,
             details=[{"function": self._func.__name__ if hasattr(self._func, "__name__") else "lambda"}],
-            sample_failures=df[failed_mask].to_dict("records") if failed else [],
+            sample_failures=df[failed_mask].to_dict("records")[:MAX_SAMPLE_FAILURES] if failed else [],
             recommendation=recommendation,
         )

@@ -2,16 +2,40 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
 
 from qdata.core.config import settings
+from qdata.db.models import Project
+from qdata.db.session import async_session_factory
 from qdata.web.routes import auth, analyze, reports, rules, synthetic, scheduler as scheduler_router, upload, processes, datasources, sources, groups, admin
 from qdata.scheduler.service import start_scheduler, stop_scheduler
+
+
+async def _recover_stale_projects():
+    """Mark analyses left in 'loading'/'running' by a previous server run as failed."""
+    try:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(Project).where(Project.status.in_(["loading", "running"]))
+            )
+            stale = result.scalars().all()
+            for p in stale:
+                prog = dict(p.progress or {})
+                prog["error"] = "El análisis se interrumpió (el servidor se reinició). Vuelve a iniciarlo."
+                p.progress = prog
+                p.status = "failed"
+            await session.commit()
+            if stale:
+                print(f"[recover] {len(stale)} análisis huérfanos marcados como fallidos")
+    except Exception as e:
+        print(f"[recover] error marcando análisis huérfanos: {e}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if settings.env != "test":
         start_scheduler()
+        await _recover_stale_projects()
     yield
     if settings.env != "test":
         stop_scheduler()

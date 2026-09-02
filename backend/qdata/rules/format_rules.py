@@ -15,6 +15,16 @@ def _row_values(df: pd.DataFrame, idx: int) -> dict:
     return {col: (v.item() if hasattr(v, 'item') else v) for col, v in row.items()}
 
 
+_FLOAT_SUFFIX_RE = re.compile(r"^(\d+)\.0+$")
+
+
+def _norm_phone_str(v: str) -> str:
+    """Strip a trailing float suffix (e.g. '7400773.0' -> '7400773') so numeric
+    phone columns loaded as float64 still validate correctly."""
+    m = _FLOAT_SUFFIX_RE.match(v)
+    return m.group(1) if m else v
+
+
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$")
 PHONE_MX = re.compile(r"^(\+52)?1?\s*\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$")
 PHONE_US = re.compile(r"^\+?1?\s*\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$")
@@ -288,14 +298,19 @@ class PhoneCheck(Rule):
     def execute(self, df: pd.DataFrame, **kwargs) -> RuleResult:
         total = 0; failed = 0; details = []; sample_failures = []
         phone_re = re.compile(r"[\d\s\-\(\)\+\.]{7,}")
-        for col in _str_cols(df):
-            series = df[col].dropna().astype(str)
-            candidates = series[series.str.contains(phone_re, na=False)]
-            if len(candidates) < 2:
-                continue
+        for col in df.columns:
             is_phone_col = bool(PHONE_COL_RE.search(col))
             is_excluded_col = bool(PHONE_COL_EXCLUDE_RE.search(col))
             if is_excluded_col and not is_phone_col:
+                continue
+            is_str_col = pd.api.types.is_object_dtype(df[col]) or pd.api.types.is_string_dtype(df[col])
+            if not is_str_col and not is_phone_col:
+                continue
+            series = df[col].dropna().astype(str)
+            if len(series) < 5:
+                continue
+            candidates = series[series.str.contains(phone_re, na=False)]
+            if len(candidates) < 2:
                 continue
             has_plus = candidates.str.startswith("+").any()
             has_parens = candidates.str.contains(r"\(\d{2,4}\)", regex=True, na=False).any()
@@ -303,7 +318,8 @@ class PhoneCheck(Rule):
             has_phone_signal = has_plus or has_parens or has_spaces_digits
             if not is_phone_col and not has_phone_signal:
                 continue
-            valid = candidates.apply(lambda v: bool(PHONE_MX.match(v) or PHONE_US.match(v) or PHONE_CO.match(v) or PHONE_INTL.match(v)))
+            normed = candidates.apply(_norm_phone_str)
+            valid = normed.apply(lambda v: bool(PHONE_MX.match(v) or PHONE_US.match(v) or PHONE_CO.match(v) or PHONE_INTL.match(v)))
             valid_ratio = valid.sum() / len(candidates)
             if valid.sum() == 0 or valid_ratio < 0.30:
                 continue
@@ -313,7 +329,7 @@ class PhoneCheck(Rule):
                 failed += n_fail
                 details.append({"column": col, "failed": n_fail, "total": len(candidates), "pct": round(n_fail / len(candidates) * 100, 2)})
                 for idx in candidates[~valid].index:
-                    sample_failures.append({"column": col, "row": int(idx), "value": str(candidates.loc[idx]), "values": _row_values(df, idx)})
+                    sample_failures.append({"column": col, "row": int(idx), "value": normed.loc[idx], "values": _row_values(df, idx)})
         passed = failed == 0
         rec = None if passed else "Estandarizar formato telefónico internacional (+57 Colombia, +52 México, +1 US)"
         return RuleResult(rule_name=self.name, description=self.description, severity=self.severity, passed=passed, total=total or len(df.columns), failed=failed, failure_pct=round(failed / (total or 1) * 100, 2), details=details, sample_failures=sample_failures, recommendation=rec)

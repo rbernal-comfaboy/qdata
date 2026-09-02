@@ -21,6 +21,9 @@ from qdata.rules.business_rules import CrossConsistencyCheck, FunctionalDependen
 from qdata.rules.advanced_rules import RowCompletenessCheck, MultivariateOutlierCheck, DriftCheck, SchemaEvolutionCheck
 from qdata.rules.integrity_rules import VolumeAnomalyCheck, SequentialIntegrityCheck, MissingFKCheck
 from qdata.rules.person_dedup_rules import FuzzyNameMatch, FuzzyIdMatch, SimilarDob, PersonCompositeSimilarity, SimilarPeopleCheck
+from qdata.rules.person_dedup_v2 import SimilarPeopleCheckV2
+from qdata.rules.person_dedup_v3 import SimilarPeopleCheckV3
+from qdata.rules.colombian_docs import CedulaCheck, NitCheck
 
 RULE_REGISTRY = {
     # Grupo: básico (reglas originales)
@@ -43,6 +46,8 @@ RULE_REGISTRY = {
     "phone_valid": PhoneCheck,
     "zip_valid": ZipCodeCheck,
     "rfc_curp": RfcCurpCheck,
+    "cedula_valid": CedulaCheck,
+    "nit_valid": NitCheck,
     # Grupo: fechas
     "invalid_dates": InvalidDateCheck,
     "date_range": DateRangeCheck,
@@ -70,16 +75,18 @@ RULE_REGISTRY = {
     "similar_dob": SimilarDob,
     "person_composite_similarity": PersonCompositeSimilarity,
     "personas_similares": SimilarPeopleCheck,
+    "personas_similares_v2": SimilarPeopleCheckV2,
+    "personas_similares_v3": SimilarPeopleCheckV3,
 }
 
 RULE_GROUPS = {
     "basico": ["nullity", "duplicates", "types", "ranges", "patterns", "uniqueness", "referential", "cardinality", "distributions", "correlations"],
-    "formato": ["email_valid", "special_chars", "string_length", "trim_check", "case_check", "phone_valid", "zip_valid", "rfc_curp"],
+    "formato": ["email_valid", "special_chars", "string_length", "trim_check", "case_check", "phone_valid", "zip_valid", "rfc_curp", "cedula_valid", "nit_valid"],
     "fechas": ["invalid_dates", "date_range", "date_inconsistency", "freshness", "latency"],
     "negocio": ["cross_consistency", "functional_dependency", "class_balance", "boolean_bias", "derived_columns"],
     "avanzadas": ["row_completeness", "multivariate_outliers", "drift", "schema_evolution"],
     "integridad": ["volume_anomaly", "sequential_integrity", "missing_fks"],
-    "personas_similares": ["personas_similares"],
+    "personas_similares": ["personas_similares", "personas_similares_v2", "personas_similares_v3"],
     "todo": list(RULE_REGISTRY.keys()),
 }
 

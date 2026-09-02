@@ -11,6 +11,8 @@ import GlassContainer from '../components/layout/GlassContainer'
 interface TableInfo { table: string; column: string; type: string; nullable: boolean }
 interface Suggestion { table: string; row_count: number | null; columns: number; col_names: string[]; tags: string[]; score: number; reason: string }
 interface SourcePreview { columns: string[]; rows: any[][]; total_rows: number }
+interface ColumnInfo { name: string; type: string; nullable: boolean }
+interface TableColumns { table: string; columns: ColumnInfo[] }
 
 const sourceLabels: Record<string, string> = {
   postgresql: 'PostgreSQL', mysql: 'MySQL', sqlserver: 'SQL Server',
@@ -19,6 +21,42 @@ const sourceLabels: Record<string, string> = {
 }
 
 const isFileType = (st: string) => ['csv', 'excel', 'json', 'parquet'].includes(st)
+
+const extractTablesFromQuery = (q: string): string[] => {
+  const names = new Set<string>()
+  const re = /\b(?:FROM|JOIN)\s+([^\s;,()]+)/gi
+  let m
+  while ((m = re.exec(q || ''))) {
+    names.add(m[1].replace(/[\[\]`"]/g, '').trim())
+  }
+  return Array.from(names)
+}
+
+const pairKey = (a: string, b: string) => (a < b ? `${a}||${b}` : `${b}||${a}`)
+
+const parseJoinRelations = (q: string, tables: string[]): Record<string, { tableA: string; colA: string; tableB: string; colB: string }> => {
+  const aliasOf = new Map<string, string>()
+  tables.forEach((t, i) => aliasOf.set(`t${i + 1}`, t))
+  const out: Record<string, { tableA: string; colA: string; tableB: string; colB: string }> = {}
+  const re = /\bLEFT JOIN\s+([A-Za-z_][\w$]*)\s+([A-Za-z_][\w$]*)\s+ON\s+([A-Za-z_][\w$]*)\.([A-Za-z_][\w$]*)\s*=\s*([A-Za-z_][\w$]*)\.([A-Za-z_][\w$]*)/gi
+  let m
+  while ((m = re.exec(q || ''))) {
+    const joinedAlias = m[3]
+    const baseAlias = m[5]
+    const tblA = aliasOf.get(baseAlias) || baseAlias
+    const tblB = aliasOf.get(joinedAlias) || joinedAlias
+    const colA = m[6]
+    const colB = m[4]
+    const key = pairKey(tblA, tblB)
+    out[key] = {
+      tableA: tblA < tblB ? tblA : tblB,
+      tableB: tblA < tblB ? tblB : tblA,
+      colA: tblA < tblB ? colA : colB,
+      colB: tblA < tblB ? colB : colA,
+    }
+  }
+  return out
+}
 
 export default function SourceForm() {
   const queryClient = useQueryClient()
@@ -52,9 +90,11 @@ export default function SourceForm() {
   const [tables, setTables] = useState<{ name: string; row_count: number | null }[]>([])
   const [tablesLoading, setTablesLoading] = useState(false)
   const [tableSearch, setTableSearch] = useState('')
-  const [selectedTable, setSelectedTable] = useState('')
-  const [tableColumns, setTableColumns] = useState<{ name: string; type: string; nullable: boolean }[]>([])
+  const [selectedTables, setSelectedTables] = useState<string[]>([])
+  const [tableColumns, setTableColumns] = useState<TableColumns[]>([])
   const [columnsLoading, setColumnsLoading] = useState(false)
+  const [combineMode, setCombineMode] = useState<'union' | 'join'>('union')
+  const [joinRelations, setJoinRelations] = useState<Record<string, { tableA: string; colA: string; tableB: string; colB: string }>>({})
 
   // Suggestions
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
@@ -118,15 +158,17 @@ export default function SourceForm() {
       }
       if (initialMode === 'visual') {
         const q = (duplicateData.query || '').trim()
-        const fromMatch = q.match(/\bFROM\s+([^\s;]+)/i)
-        if (fromMatch && duplicateData.selected_columns?.length) {
-          const tableName = fromMatch[1].replace(/[\[\]`"]/g, '')
-          setSelectedTable(tableName)
-          setColumnsLoading(true)
-          api.get(`/datasources/${duplicateData.data_source_id}/tables/${encodeURIComponent(tableName)}/columns`).then(r => {
-            setTableColumns(r.data.columns || [])
-            setSelectedColumns(duplicateData.selected_columns || [])
-          }).catch(() => setTableColumns([])).finally(() => setColumnsLoading(false))
+        const tablesInQ = extractTablesFromQuery(q)
+        if (tablesInQ.length > 0) {
+          setSelectedTables(tablesInQ)
+          loadColumnsForTables(duplicateData.data_source_id, tablesInQ, duplicateData.selected_columns || [])
+        }
+        if (/\bJOIN\b/i.test(q)) {
+          setCombineMode('join')
+          setJoinRelations(parseJoinRelations(q, tablesInQ))
+        } else {
+          setCombineMode('union')
+          setJoinRelations({})
         }
       }
     }
@@ -160,11 +202,26 @@ export default function SourceForm() {
           }
         }
       }
+      if (initialMode === 'visual') {
+        const q = (sourceData.query || '').trim()
+        const tablesInQ = extractTablesFromQuery(q)
+        if (tablesInQ.length > 0) {
+          setSelectedTables(tablesInQ)
+          loadColumnsForTables(sourceData.data_source_id, tablesInQ, sourceData.selected_columns || [])
+        }
+        if (/\bJOIN\b/i.test(q)) {
+          setCombineMode('join')
+          setJoinRelations(parseJoinRelations(q, tablesInQ))
+        } else {
+          setCombineMode('union')
+          setJoinRelations({})
+        }
+      }
     }
   }, [sourceData])
 
   useEffect(() => {
-    if (!dsId) { setTables([]); setSelectedTable(''); setTableColumns([]); setSuggestions([]); setTablesError(''); return }
+    if (!dsId) { setTables([]); setSelectedTables([]); setTableColumns([]); setSuggestions([]); setTablesError(''); setCombineMode('union'); setJoinRelations({}); return }
     setTablesLoading(true); setTablesError(''); setShowSuggest(false)
     api.get(`/datasources/${dsId}/tables`).then(r => {
       const raw = r.data.tables || []
@@ -178,12 +235,104 @@ export default function SourceForm() {
   const conn = useMemo(() => (connections || []).find((c: any) => c.id === dsId), [connections, dsId])
   const isFile = conn && isFileType(conn.source_type)
 
+  const allColumnNames = useMemo(() => {
+    const names = new Set<string>()
+    tableColumns.forEach(g => g.columns.forEach(c => names.add(c.name)))
+    return Array.from(names)
+  }, [tableColumns])
+
+  const columnsForTable = (t: string): ColumnInfo[] => {
+    const g = tableColumns.find(x => x.table === t)
+    return g ? g.columns : []
+  }
+
+  const buildVisualQuery = useCallback(() => {
+    if (selectedTables.length === 0) return ''
+    if (selectedColumns.length === 0 && selectedTables.length === 1) {
+      return `SELECT * FROM ${selectedTables[0]}`
+    }
+    const cols = selectedColumns.length > 0
+      ? selectedColumns
+      : Array.from(new Set(tableColumns.flatMap(g => g.columns.map(c => c.name))))
+    if (cols.length === 0) return ''
+    return selectedTables.map(t => {
+      const tcols = new Set(columnsForTable(t).map(c => c.name))
+      const parts = cols.map(c => tcols.has(c) ? c : `NULL AS ${c}`)
+      return `SELECT ${parts.join(', ')} FROM ${t}`
+    }).join('\nUNION ALL\n')
+  }, [selectedTables, selectedColumns, tableColumns])
+
+  const buildJoinQuery = useCallback(() => {
+    if (selectedTables.length === 0) return ''
+    const aliasOf = new Map<string, string>()
+    selectedTables.forEach((t, i) => aliasOf.set(t, `t${i + 1}`))
+    const edges: { a: string; b: string; ca: string; cb: string }[] = []
+    Object.values(joinRelations).forEach(rel => {
+      if (rel.colA && rel.colB) edges.push({ a: rel.tableA, b: rel.tableB, ca: rel.colA, cb: rel.colB })
+    })
+    const base = selectedTables[0]
+    const reach = new Set([base])
+    const joins: { nt: string; nc: string; tt: string; tc: string }[] = []
+    const used = new Set<number>()
+    let progress = true
+    while (progress) {
+      progress = false
+      edges.forEach((e, i) => {
+        if (used.has(i)) return
+        if (reach.has(e.a) && !reach.has(e.b)) {
+          joins.push({ nt: e.b, nc: e.cb, tt: e.a, tc: e.ca })
+          reach.add(e.b); used.add(i); progress = true
+        } else if (reach.has(e.b) && !reach.has(e.a)) {
+          joins.push({ nt: e.a, nc: e.ca, tt: e.b, tc: e.cb })
+          reach.add(e.a); used.add(i); progress = true
+        }
+      })
+    }
+    if (reach.size !== selectedTables.length) return ''
+    const cols = selectedColumns.length > 0 ? selectedColumns : allColumnNames
+    if (cols.length === 0) return ''
+    const resolved = cols.map(name => {
+      for (const t of selectedTables) {
+        if (columnsForTable(t).some(c => c.name === name)) return { alias: aliasOf.get(t)!, col: name }
+      }
+      return { alias: aliasOf.get(base)!, col: name }
+    })
+    const selectParts = resolved.map(r => `${r.alias}.${r.col} AS ${r.col}`)
+    const fromParts = [`FROM ${base} ${aliasOf.get(base)}`]
+    joins.forEach(j => {
+      fromParts.push(`LEFT JOIN ${j.nt} ${aliasOf.get(j.nt)} ON ${aliasOf.get(j.nt)}.${j.nc} = ${aliasOf.get(j.tt)}.${j.tc}`)
+    })
+    return `SELECT ${selectParts.join(', ')}\n${fromParts.join('\n')}`
+  }, [selectedTables, selectedColumns, tableColumns, allColumnNames, joinRelations])
+
+  const pairRows = useMemo(() => {
+    const rows: { a: string; b: string; key: string }[] = []
+    for (let i = 0; i < selectedTables.length; i++) {
+      for (let j = i + 1; j < selectedTables.length; j++) {
+        rows.push({ a: selectedTables[i], b: selectedTables[j], key: pairKey(selectedTables[i], selectedTables[j]) })
+      }
+    }
+    return rows
+  }, [selectedTables])
+
+  const setRelation = (a: string, b: string, ca: string, cb: string) => {
+    const key = pairKey(a, b)
+    setJoinRelations(prev => {
+      const next = { ...prev }
+      if (!ca && !cb) delete next[key]
+      else next[key] = { tableA: a < b ? a : b, tableB: a < b ? b : a, colA: a < b ? ca : cb, colB: a < b ? cb : ca }
+      return next
+    })
+  }
+
   const previewQuery = useMemo(() => {
     if (!dsId || isFile) return null
     if (mode === 'sql') return query.trim() || null
-    if (mode === 'visual' && selectedTable) return `SELECT * FROM ${selectedTable}`
+    if (mode === 'visual' && selectedTables.length > 0) {
+      return combineMode === 'join' ? buildJoinQuery() : buildVisualQuery()
+    }
     return null
-  }, [dsId, isFile, mode, query, selectedTable])
+  }, [dsId, isFile, mode, query, buildVisualQuery, buildJoinQuery, selectedTables, combineMode])
 
   useEffect(() => {
     if (!dsId || !previewQuery) { setFormPreview(null); setFormPreviewError(''); setFormPreviewLoading(false); return }
@@ -280,35 +429,68 @@ export default function SourceForm() {
     } catch {} finally { setSuggestLoading(false) }
   }
 
-  const loadTableColumns = async (table: string) => {
-    setSelectedTable(table)
-    setSelectedColumns([])
+  const loadColumnsForTables = async (dsIdParam: string, tablesToLoad: string[], forcedCols?: string[]) => {
+    if (tablesToLoad.length === 0) { setTableColumns([]); setSelectedColumns([]); return }
     setColumnsLoading(true)
     try {
-      const r = await api.get(`/datasources/${dsId}/tables/${table}/columns`)
-      setTableColumns(r.data.columns || [])
-      setSelectedColumns(r.data.columns?.map((c: any) => c.name) || [])
-    } catch { setTableColumns([]) } finally { setColumnsLoading(false) }
+      const groups: TableColumns[] = await Promise.all(tablesToLoad.map(async t => {
+        try {
+          const r = await api.get(`/datasources/${dsIdParam}/tables/${encodeURIComponent(t)}/columns`)
+          return { table: t, columns: r.data.columns || [] }
+        } catch {
+          return { table: t, columns: [] }
+        }
+      }))
+      setTableColumns(groups)
+      if (forcedCols) {
+        setSelectedColumns(forcedCols)
+      } else {
+        const names = new Set<string>()
+        groups.forEach(g => g.columns.forEach(c => names.add(c.name)))
+        setSelectedColumns(Array.from(names))
+      }
+    } catch {
+      setTableColumns([])
+    } finally { setColumnsLoading(false) }
+  }
+
+  const toggleTable = (t: string) => {
+    const isSelected = selectedTables.includes(t)
+    const next = isSelected ? selectedTables.filter(x => x !== t) : [...selectedTables, t]
+    setSelectedTables(next)
+    setJoinRelations(prev => {
+      const pruned: Record<string, { tableA: string; colA: string; tableB: string; colB: string }> = {}
+      Object.entries(prev).forEach(([k, r]) => {
+        if (next.includes(r.tableA) && next.includes(r.tableB)) pruned[k] = r
+      })
+      return pruned
+    })
+    if (next.length === 0) {
+      setTableColumns([]); setSelectedColumns([]); setFormPreview(null); setCombineMode('union'); setJoinRelations({})
+    } else {
+      loadColumnsForTables(dsId, next)
+    }
   }
 
   const toggleColumn = (col: string) => {
     setSelectedColumns(prev => prev.includes(col) ? prev.filter(c => c !== col) : [...prev, col])
   }
 
-  const selectAllCols = () => setSelectedColumns(tableColumns.map(c => c.name))
+  const selectAllCols = () => setSelectedColumns(allColumnNames)
   const deselectAllCols = () => setSelectedColumns([])
 
   const applySuggestion = (s: Suggestion) => {
-    setSelectedTable(s.table)
-    setSelectedColumns(s.col_names)
-    setColumnsLoading(true)
-    api.get(`/datasources/${dsId}/tables/${s.table}/columns`).then(r => {
-      setTableColumns(r.data.columns || [])
-    }).catch(() => setTableColumns([])).finally(() => setColumnsLoading(false))
+    setSelectedTables([s.table])
+    loadColumnsForTables(dsId, [s.table], s.col_names)
   }
 
   const handleSave = async () => {
     if (!name || !dsId) return
+    const visualQuery = combineMode === 'join' ? buildJoinQuery() : buildVisualQuery()
+    if (mode === 'visual' && !visualQuery) {
+      setError(combineMode === 'join' && selectedTables.length > 1 ? 'Define las relaciones entre las tablas para generar la consulta' : 'Selecciona al menos una tabla')
+      return
+    }
     setSaving(true); setError('')
     const steps: { msg: string; pct: number }[] = [
       { msg: 'Validando datos...', pct: 10 },
@@ -336,7 +518,7 @@ export default function SourceForm() {
 
     const payload: any = {
       name, data_source_id: dsId,
-      query: isFile ? '' : (mode === 'sql' ? query : `SELECT * FROM ${selectedTable}`),
+      query: isFile ? '' : (mode === 'sql' ? query : (combineMode === 'join' ? buildJoinQuery() : buildVisualQuery())),
       selected_columns: selectedColumns,
       row_limit: rowLimit,
       storage_mode: storageMode,
@@ -386,7 +568,7 @@ export default function SourceForm() {
 
             <div>
               <label className="block text-sm text-muted mb-1">Conexión</label>
-              <select value={dsId} onChange={e => { setDsId(e.target.value); setSelectedTable(''); setTableColumns([]); setSelectedColumns([]); setFormPreview(null) }}
+              <select value={dsId} onChange={e => { setDsId(e.target.value); setSelectedTables([]); setTableColumns([]); setSelectedColumns([]); setFormPreview(null); setCombineMode('union'); setJoinRelations({}) }}
                 className="glass-input">
                 <option value="">Seleccionar conexión...</option>
                 {(connections || []).map((c: any) => (
@@ -631,19 +813,69 @@ export default function SourceForm() {
                       ) : filteredTables.length > 0 ? (
                         <div className="max-h-40 overflow-y-auto space-y-0.5 border border-white/10 rounded-xl p-1.5">
                           {filteredTables.map(t => (
-                            <button key={t.name} onClick={() => loadTableColumns(t.name)}
-                              className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-all ${
-                                selectedTable === t.name ? 'bg-indigo-500/20 text-indigo-300' : 'text-muted hover:bg-white/5'
+                            <label key={t.name}
+                              className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs cursor-pointer transition-all ${
+                                selectedTables.includes(t.name) ? 'bg-indigo-500/20 text-indigo-300' : 'text-muted hover:bg-white/5'
                               }`}>
-                              <span>{t.name}</span>
+                              <input type="checkbox" checked={selectedTables.includes(t.name)}
+                                onChange={() => toggleTable(t.name)} className="w-3 h-3 rounded accent-indigo-500 shrink-0" />
+                              <span className="truncate">{t.name}</span>
                               {t.row_count !== null && t.row_count !== undefined && (
-                                <span className="ml-2 text-[10px] text-muted">{t.row_count.toLocaleString()} registros</span>
+                                <span className="ml-auto text-[10px] text-muted shrink-0">{t.row_count.toLocaleString()} registros</span>
                               )}
-                            </button>
+                            </label>
                           ))}
                         </div>
                       ) : (
                         <p className="text-xs text-muted py-2">No hay tablas disponibles</p>
+                      )}
+
+                      {selectedTables.length >= 2 && (
+                        <div className="flex gap-1.5">
+                          <button onClick={() => setCombineMode('union')}
+                            className={`flex-1 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-all border ${
+                              combineMode === 'union'
+                                ? 'bg-indigo-500/20 border-indigo-400 text-indigo-300'
+                                : 'bg-white/5 border-white/10 text-muted hover:bg-white/10'
+                            }`}>
+                            Combinar filas (UNION ALL)
+                          </button>
+                          <button onClick={() => setCombineMode('join')}
+                            className={`flex-1 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-all border ${
+                              combineMode === 'join'
+                                ? 'bg-indigo-500/20 border-indigo-400 text-indigo-300'
+                                : 'bg-white/5 border-white/10 text-muted hover:bg-white/10'
+                            }`}>
+                            Relacionar tablas (JOIN)
+                          </button>
+                        </div>
+                      )}
+
+                      {combineMode === 'join' && selectedTables.length >= 2 && (
+                        <div className="border border-indigo-500/20 bg-indigo-500/5 rounded-xl p-2 space-y-1.5">
+                          <div className="text-[10px] font-semibold text-indigo-300">Relaciones entre tablas</div>
+                          {pairRows.map(p => {
+                            const rel = joinRelations[p.key]
+                            return (
+                              <div key={p.key} className="flex items-center gap-1 text-[10px]">
+                                <span className="truncate max-w-[64px] text-muted shrink-0">{p.a}</span>
+                                <select value={rel?.colA || ''} onChange={e => setRelation(p.a, p.b, e.target.value, rel?.colB || '')}
+                                  className="glass-input !py-0.5 !text-[10px] flex-1 min-w-0">
+                                  <option value="">— columna —</option>
+                                  {columnsForTable(p.a).map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                                </select>
+                                <span className="text-muted shrink-0">=</span>
+                                <select value={rel?.colB || ''} onChange={e => setRelation(p.a, p.b, rel?.colA || '', e.target.value)}
+                                  className="glass-input !py-0.5 !text-[10px] flex-1 min-w-0">
+                                  <option value="">— columna —</option>
+                                  {columnsForTable(p.b).map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                                </select>
+                                <span className="truncate max-w-[64px] text-muted shrink-0">{p.b}</span>
+                              </div>
+                            )
+                          })}
+                          <p className="text-[9px] text-muted">Indica qué columnas relacionan cada par de tablas. La primera tabla seleccionada es la base.</p>
+                        </div>
                       )}
 
                       {columnsLoading ? (
@@ -653,35 +885,42 @@ export default function SourceForm() {
                       ) : tableColumns.length > 0 ? (
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <label className="text-xs text-muted">{selectedTable} · {tableColumns.length} col(s)</label>
+                            <label className="text-xs text-muted">{selectedTables.length === 1 ? `${selectedTables[0]} · ${allColumnNames.length} col(s)` : `${selectedTables.length} tablas · ${allColumnNames.length} col(s)`}</label>
                             <div className="flex gap-2 text-[10px]">
                               <button onClick={selectAllCols} className="text-indigo-400 hover:text-indigo-300">Todas</button>
                               <button onClick={deselectAllCols} className="text-muted hover:text-white">Ninguna</button>
                             </div>
                           </div>
-                          <div className="max-h-48 overflow-y-auto border border-white/10 rounded-xl p-1.5 space-y-0.5">
-                            {tableColumns.map(c => {
-                              const sampleVal = columnSamples[c.name]
-                              return (
-                                <label key={c.name}
-                                  className={`flex items-center gap-1.5 px-1.5 py-1 rounded text-[11px] cursor-pointer transition-all ${
-                                    selectedColumns.includes(c.name) ? 'bg-indigo-500/15 text-indigo-300' : 'text-muted hover:bg-white/5'
-                                  }`}>
-                                  <input type="checkbox" checked={selectedColumns.includes(c.name)}
-                                    onChange={() => toggleColumn(c.name)} className="w-3 h-3 rounded accent-indigo-500 shrink-0" />
-                                  <span className="truncate font-medium">{c.name}</span>
-                                  <span className="text-[9px] opacity-40 shrink-0">{c.type}</span>
-                                  {sampleVal !== undefined && (
-                                    <span className="ml-auto text-[10px] opacity-50 truncate max-w-[140px] font-mono" title={String(sampleVal)}>
-                                      {sampleVal === null ? <span className="text-red-400">NULL</span> : String(sampleVal).slice(0, 40)}
-                                    </span>
-                                  )}
-                                </label>
-                              )
-                            })}
+                          <div className="max-h-48 overflow-y-auto border border-white/10 rounded-xl p-1.5 space-y-1.5">
+                            {tableColumns.map(group => (
+                              <div key={group.table}>
+                                <div className="text-[10px] font-semibold text-muted px-1 py-0.5 sticky top-0 bg-[#1a1a2e] z-10">
+                                  {group.table} · {group.columns.length} col(s)
+                                </div>
+                                {group.columns.map(c => {
+                                  const sampleVal = columnSamples[c.name]
+                                  return (
+                                    <label key={c.name}
+                                      className={`flex items-center gap-1.5 px-1.5 py-1 rounded text-[11px] cursor-pointer transition-all ${
+                                        selectedColumns.includes(c.name) ? 'bg-indigo-500/15 text-indigo-300' : 'text-muted hover:bg-white/5'
+                                      }`}>
+                                      <input type="checkbox" checked={selectedColumns.includes(c.name)}
+                                        onChange={() => toggleColumn(c.name)} className="w-3 h-3 rounded accent-indigo-500 shrink-0" />
+                                      <span className="truncate font-medium">{c.name}</span>
+                                      <span className="text-[9px] opacity-40 shrink-0">{c.type}</span>
+                                      {sampleVal !== undefined && (
+                                        <span className="ml-auto text-[10px] opacity-50 truncate max-w-[140px] font-mono" title={String(sampleVal)}>
+                                          {sampleVal === null ? <span className="text-red-400">NULL</span> : String(sampleVal).slice(0, 40)}
+                                        </span>
+                                      )}
+                                    </label>
+                                  )
+                                })}
+                              </div>
+                            ))}
                           </div>
                         </div>
-                      ) : selectedTable ? <p className="text-xs text-muted">Sin columnas</p> : null}
+                      ) : selectedTables.length > 0 ? <p className="text-xs text-muted">Sin columnas</p> : null}
 
                       <div className="flex items-center gap-2 pt-1">
                         <button onClick={loadSuggest} disabled={suggestLoading}
@@ -755,7 +994,11 @@ export default function SourceForm() {
                     </div>
                   ) : (
                     <div className="h-32 flex items-center justify-center text-xs text-muted px-4 text-center">
-                      {tableActiveTab === 'visual' ? 'Selecciona una tabla para ver la vista previa' : 'Escribe una consulta SQL para ver la vista previa'}
+                      {tableActiveTab === 'visual'
+                        ? (combineMode === 'join' && selectedTables.length > 1
+                          ? 'Define las relaciones entre las tablas para ver la vista previa'
+                          : 'Selecciona una tabla para ver la vista previa')
+                        : 'Escribe una consulta SQL para ver la vista previa'}
                     </div>
                   )}
                 </div>

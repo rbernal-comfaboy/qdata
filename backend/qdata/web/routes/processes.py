@@ -1,10 +1,12 @@
 import asyncio
 import re as _re
+import uuid as _uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, desc, or_
+from sqlalchemy import select, desc, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from qdata.auth.dependencies import get_current_user
 from qdata.auth.permissions import require_role
@@ -67,7 +69,7 @@ async def list_processes(
             or_(Project.user_id == user.id, Project.group_id.in_(subq))
         )
     if group_id:
-        query = query.where(Project.group_id == group_id)
+        query = query.where(Project.group_id == _uuid.UUID(group_id))
     result = await session.execute(query.order_by(desc(Project.created_at)))
     projects = result.scalars().all()
 
@@ -76,15 +78,23 @@ async def list_processes(
     task_map = {}
 
     if project_ids:
-        subq_latest = (
-            select(Report.project_id, Report.id.label("report_id"))
+        subq_max = (
+            select(
+                Report.project_id,
+                func.max(Report.executed_at).label("max_date")
+            )
             .where(Report.project_id.in_(project_ids))
-            .order_by(Report.executed_at.desc())
+            .group_by(Report.project_id)
             .subquery()
         )
         lr_result = await session.execute(
-            select(Report, subq_latest.c.project_id)
-            .join(subq_latest, Report.id == subq_latest.c.report_id)
+            select(Report, subq_max.c.project_id)
+            .options(defer(Report.result_json), defer(Report.recommendations))
+            .join(
+                subq_max,
+                (Report.project_id == subq_max.c.project_id) &
+                (Report.executed_at == subq_max.c.max_date)
+            )
         )
         for rep, pid in lr_result.all():
             latest_map[str(pid)] = rep
@@ -129,16 +139,17 @@ async def list_processes(
 
 @router.get("/{process_id}")
 async def get_process(
-    process_id: str,
+    process_id: _uuid.UUID,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    pid = process_id
     if user.role == "admin":
-        base_q = select(Project).where(Project.id == process_id)
+        base_q = select(Project).where(Project.id == pid)
     else:
         subq = select(GroupPermission.group_id).where(GroupPermission.user_id == user.id)
         base_q = select(Project).where(
-            Project.id == process_id,
+            Project.id == pid,
             or_(Project.user_id == user.id, Project.group_id.in_(subq))
         )
     result = await session.execute(base_q)
@@ -147,7 +158,10 @@ async def get_process(
         raise HTTPException(status_code=404, detail="Process not found")
 
     reports_result = await session.execute(
-        select(Report).where(Report.project_id == project.id).order_by(desc(Report.executed_at))
+        select(Report)
+        .options(defer(Report.result_json), defer(Report.recommendations))
+        .where(Report.project_id == project.id)
+        .order_by(desc(Report.executed_at))
     )
     reports = reports_result.scalars().all()
 
@@ -163,6 +177,7 @@ async def get_process(
         "progress": project.progress,
         "source_config": project.source_config,
         "rules_config": project.rules_config,
+        "rule_configs": project.rule_configs or {},
         "group_id": str(project.group_id) if project.group_id else None,
         "created_at": project.created_at.isoformat() if project.created_at else None,
         "updated_at": project.updated_at.isoformat() if project.updated_at else None,
@@ -171,8 +186,6 @@ async def get_process(
                 "id": str(r.id),
                 "score": r.score,
                 "label": r.label,
-                "result": r.result_json,
-                "recommendations": r.recommendations,
                 "summary": r.summary,
                 "executed_at": r.executed_at.isoformat() if r.executed_at else None,
             }
@@ -197,7 +210,7 @@ async def get_process(
 
 @router.put("/{process_id}")
 async def update_process(
-    process_id: str,
+    process_id: _uuid.UUID,
     req: UpdateProcessRequest,
     user: User = Depends(require_role(["admin"])),
     session: AsyncSession = Depends(get_session),
@@ -214,7 +227,7 @@ async def update_process(
     if req.rules_config is not None:
         project.rules_config = req.rules_config
     if req.group_id is not None:
-        project.group_id = req.group_id if req.group_id else None
+        project.group_id = _uuid.UUID(req.group_id) if req.group_id else None
 
     await session.commit()
     return {"ok": True}
@@ -222,7 +235,7 @@ async def update_process(
 
 @router.delete("/{process_id}")
 async def delete_process(
-    process_id: str,
+    process_id: _uuid.UUID,
     user: User = Depends(require_role(["admin"])),
     session: AsyncSession = Depends(get_session),
 ):
@@ -237,7 +250,7 @@ async def delete_process(
 
 @router.post("/{process_id}/pause")
 async def pause_process(
-    process_id: str,
+    process_id: _uuid.UUID,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -259,7 +272,7 @@ async def pause_process(
 
 @router.post("/{process_id}/resume")
 async def resume_process(
-    process_id: str,
+    process_id: _uuid.UUID,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -281,7 +294,7 @@ async def resume_process(
 
 @router.post("/{process_id}/stop")
 async def stop_process(
-    process_id: str,
+    process_id: _uuid.UUID,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -305,7 +318,7 @@ async def stop_process(
 
 @router.post("/{process_id}/rerun")
 async def rerun_process(
-    process_id: str,
+    process_id: _uuid.UUID,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -326,11 +339,24 @@ async def rerun_process(
     if df.empty:
         raise HTTPException(status_code=400, detail="No data loaded")
 
+    full_df = df
     selected_columns = sc.get("selected_columns")
     if selected_columns:
         sel = [c for c in selected_columns if c in df.columns]
         if sel:
             df = df[sel]
+
+    rule_configs: dict = {}
+    if project.rule_configs:
+        rule_configs = {k: v for k, v in project.rule_configs.items() if k in (project.rules_config or [])}
+    if not selected_columns and (project.rules_config or []):
+        from qdata.rules.person_fields import email_columns, phone_columns
+        if "phone_valid" in project.rules_config:
+            cols = phone_columns(df.columns)
+        else:
+            cols = email_columns(df.columns)
+        if cols and "duplicates" in project.rules_config:
+            rule_configs["duplicates"] = {"columns": [cols[0]]}
 
     project.status = "running"
     project.progress = {
@@ -342,9 +368,10 @@ async def rerun_process(
     asyncio.create_task(run_analysis_background(
         project_id=project.id,
         df=df,
+        full_df=full_df,
         rules_config=project.rules_config,
         user_id=user.id,
-        rule_configs={},
+        rule_configs=rule_configs,
     ))
 
     return {"status": "running", "project_id": str(project.id)}

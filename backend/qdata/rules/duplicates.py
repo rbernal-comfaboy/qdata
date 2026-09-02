@@ -1,6 +1,6 @@
 import pandas as pd
 
-from qdata.rules.base import Rule, RuleResult
+from qdata.rules.base import MAX_DUPE_ENTRIES, MAX_DUPE_GROUP_TOTAL, Rule, RuleResult
 
 
 class DuplicateCheck(Rule):
@@ -31,11 +31,35 @@ class DuplicateCheck(Rule):
             dupes = df[exact_dupes]
             dupes_str = df_str[exact_dupes]
             grouped = dupes_str.groupby(list(df_str.columns))
+            groups = []
             for _, group in grouped:
-                rows = []
-                for idx in group.index:
-                    rows.append({"row": int(idx), "values": dupes.loc[idx].to_dict()})
-                sample_failures.append({"rows": rows})
+                members = [{"row": int(idx)} for idx in group.index]
+                groups.append({"size": len(members), "rows": members})
+            groups.sort(key=lambda g: g["size"], reverse=True)
+
+            # One entry per duplicated row (values are attached later by the
+            # analyze route, limited to identity + email columns).
+            entries = []
+            for g in groups:
+                for m in g["rows"]:
+                    entries.append({"row": m["row"], "group_size": g["size"]})
+                    if len(entries) >= MAX_DUPE_ENTRIES:
+                        break
+                if len(entries) >= MAX_DUPE_ENTRIES:
+                    break
+            sample_failures = entries
+
+            # Full groups (largest first) so the frontend can render every member.
+            groups_out = []
+            total = 0
+            for g in groups:
+                take = min(len(g["rows"]), MAX_DUPE_GROUP_TOTAL - total)
+                if take <= 0:
+                    break
+                groups_out.append({"size": g["size"], "rows": [{"row": m["row"]} for m in g["rows"][:take]]})
+                total += take
+            if groups_out:
+                details.append({"type": "duplicate_groups", "groups": groups_out})
 
         passed = exact_pct == 0
         recommendation = None

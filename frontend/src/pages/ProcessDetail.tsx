@@ -50,13 +50,13 @@ export default function ProcessDetail() {
   const [schedWeekday, setSchedWeekday] = useState('1')
   const [schedEmails, setSchedEmails] = useState('')
 
-  const { data: process, isLoading } = useQuery({
+  const { data: process, isLoading, isError } = useQuery({
     queryKey: ['process', id],
     queryFn: () => api.get(`/processes/${id}`).then((r) => r.data),
     enabled: !!id,
     refetchInterval: (query) => {
       const data = query.state.data
-      if (data?.status === 'running' || data?.status === 'pending') return 2000
+      if (data?.status === 'running' || data?.status === 'pending' || data?.status === 'loading') return 2000
       return false
     },
   })
@@ -68,7 +68,7 @@ export default function ProcessDetail() {
   })
 
   const { data: analysisGroups = [] } = useQuery({
-    queryKey: ['api-groups'],
+    queryKey: ['groups'],
     queryFn: () => api.get('/api/groups').then((r) => r.data),
     enabled: editing,
   })
@@ -124,8 +124,11 @@ export default function ProcessDetail() {
     })
 
     es.addEventListener('error', () => {
-      es.close()
-      esRef.current = null
+      const current = queryClient.getQueryData(['process', id]) as any
+      if (current?.status === 'completed' || current?.status === 'failed' || current?.status === 'cancelled') {
+        es.close()
+        esRef.current = null
+      }
     })
 
     return () => {
@@ -258,6 +261,17 @@ export default function ProcessDetail() {
         <div className="skeleton h-48 rounded-xl" />
         <div className="skeleton h-64 rounded-xl" />
       </div>
+    )
+  }
+
+  if (isError && !process) {
+    return (
+      <GlassContainer className="text-center py-12">
+        <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
+        <p className="text-xl text-white mb-1">Error al cargar el proceso</p>
+        <p className="text-sm text-muted mb-4">No se pudo obtener la información del análisis.</p>
+        <Link to="/processes" className="text-indigo-400 hover:text-indigo-300 underline">Volver a la lista</Link>
+      </GlassContainer>
     )
   }
 
@@ -482,8 +496,8 @@ export default function ProcessDetail() {
                     <span className="text-muted truncate">{progress.current_rule}</span>
                     {progress.rule_phase && (
                       <span className="shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                        {progress.rule_phase === 'blocking' ? 'Bloqueo' :
-                         progress.rule_phase === 'scoring' ? 'Scoring' :
+                        {progress.rule_phase === 'blocking' ? 'Buscando candidatos' :
+                         progress.rule_phase === 'scoring' ? 'Similitud' :
                          progress.rule_phase === 'clustering' ? 'Agrupando' : progress.rule_phase}
                       </span>
                     )}
