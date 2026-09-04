@@ -1,5 +1,46 @@
 # QData Dev Log
 
+## 2026-09-02 — Eliminar reporte desde el Detalle de Proceso (botón en la esquina derecha)
+
+**Request**: poder eliminar un reporte dentro de todos los grupos de análisis, con un botón en la esquina derecha. El usuario eligió ubicarlo en **Detalle de Proceso** (lista "Reportes (n)") y que solo **admin** pueda eliminar (el endpoint `DELETE /reports/{id}` ya exige `require_role(["admin"])`).
+
+**Changes made** (solo `frontend/src/pages/ProcessDetail.tsx` — backend sin cambios, el DELETE ya existía y estaba protegido):
+- Estado `confirmReportDeleteId: string | null` y mutación `reportDeleteMutation` (`api.delete('/reports/{id}')`) que invalida `['process', id]` y `['reports']`; muestra `alert` si el backend rechaza.
+- Cada fila de la lista "Reportes (n)" deja de ser un `<Link>` completo: el contenido (score + label + fecha) queda como `<Link>` a `/reports/{id}`, y a la derecha se agrega, **solo si `isAdmin`**, un botón de papelera (`Trash2`) en la esquina derecha junto a "Ver detalle", con confirmación inline "¿Eliminar? Sí/No" (patrón de Reports.tsx).
+- Import `AlertTriangle` agregado a lucide-react (antes solo estaba `AlertCircle` en este archivo).
+
+**Verification**:
+- `npx tsc --noEmit`: limpio salvo errores pre-existentes de `@dnd-kit` en `Connections.tsx` (documentados, no relacionados).
+- Frontend es dev server (vite `--host 0.0.0.0`), los cambios se reflejan sin rebuild.
+
+**Gotchas**:
+- El endpoint `DELETE /reports/{id}` es `require_role(["admin"])`; para no-admin no se renderiza el botón (sin cambios de backend).
+- El `DELETE /reports/{id}` borra el reporte y (por FK `ondelete=?)`) sus `ErrorAction`; revisar cascadas si se quiere borrado en cadena.
+
+## 2026-09-02 — Score real de Procesos: columna numeric(5,2) + backfill del valor fraccional
+
+**Problem**: en el grupo Informix, "Personas identicas" mostraba `100.00/100` en la tarjeta pero el mensaje decía `Score: 99.98/100 (excelente)`. La causa raíz: las columnas `score` de `reports` y `task_history` se crearon como **`integer`** en la migración inicial (`8f55dea7d76e_initial.py`), aunque el modelo ORM declara `Float`. Al guardar `99.98` en una columna `integer`, PostgreSQL lo redondea a `100` (la pérdida de precisión ocurre al INSERTAR). El `summary` era texto y conservaba `99.98`, por eso el UI mostraba 100 en la tarjeta y 99.98 en la frase. El usuario eligió **Numeric(5,2)** y **recalcular/actualizar** los datos existentes.
+
+**Changes made**:
+- `backend/alembic/versions/d4e5f6a7b8c9_score_columns_to_numeric.py` (NUEVO, head `b2c3d4e5f6a7+1`): `op.alter_column` a `sa.Numeric(5,2)` con `postgresql_using='score::numeric(5,2)'` para `reports.score` y `task_history.score` (NOTA: `projects` NO tiene columna `score` — la migración inicial la crea en `task_history`, no en `projects`; solo alterar las 2 tablas que la tienen en BD).
+- `backend/qdata/db/models.py`: `Report.score` y `TaskHistory.score` de `Column(Float)` → `Column(Numeric(5,2))` (import `Numeric` agregado).
+- `backend/qdata/core/score.py`: anotación `calculate_score` corregida `tuple[int, str]` → `tuple[float, str]` (siempre devolvió float con `round(...,2)`).
+- `backend/scripts/backfill_scores.py` (NUEVO): recalcula cada `reports.score` desde `result_json.results[]` (`severity` + `failure_pct`) con la misma fórmula de `calculate_score` (WEIGHTS error/warning/info = 10/5/2) y re-escribe `score`+`label`; sincroniza `task_history.score` para los historiales con `report_id`.
+
+**Verification**:
+- Migración aplicada: `SELECT ... information_schema.columns` → `reports.score` y `task_history.score` = `numeric(5,2)` (precision 5, scale 2).
+- Backfill: `Updated 227 reports, skipped 0`. Ej. "Personas identicas" ahora `score=99.98`, "Email duplicado y valido" `99.56`, "Celular duplicado" `99.81`; los `nit_valid`/`cedulas`/`fechas` con `total=0` quedan en 100 (correcto por diseño).
+- API E2E con token (demo@qdata.com): `GET /processes?group_id=<Informix>` devuelve scores como **float** (p.ej. `Personas identicas -> 99.98`); `GET /api/groups` → Informix `avg_score: 99.92` (real, antes 100).
+- Serialización: FastAPI `jsonable_encoder` convierte `Decimal` → `float` (verificado `Decimal('99.98')` → `99.98 <class 'float'>`), así el frontend recibe números y sus comparaciones/`toFixed(2)` funcionan igual.
+- Backend reiniciado (restart container) y healthy.
+
+**Gotchas**:
+- La precisión fraccional de los reportes viejos YA se había perdido al guardar (quedó `100`); no se puede recuperar de la columna, por eso el backfill la RECALCULA desde `result_json.results[]` (que sí conserva `failure_pct`). Es la fuente autoritativa para re-derivar el score.
+- `rule_totals` NO tiene `failure_pct` (solo pass/fail/total/severity) → usar `result_json.results[]` para recomputar, no `rule_totals`.
+- `projects` NO tiene columna `score` pese a que la migración inicial la sugiere; verificar el schema real (`information_schema.columns`) antes de `alter_column`, o la migración falla.
+- `reporter.py` (PDF/Excel) declara `score: int` en type hints y usa `{score}`/`str(score)` — funciona igual con float/Decimal (type hints no son vinculantes).
+- El backend corre SIN `--reload` (docker-compose `command` con uvicorn sin flag): los cambios de código (models.py, score.py) exigen `docker restart qdata-backend` para cargarse. La migración/backfill se aplican vía `docker exec`, independientes del proceso.
+
 ## 2026-08-14 — nit_valid: regla de negocio corregida (base 6-10 dígitos, sanitizar ceros, warnings)
 
 **Request**: el análisis de negocio indicó que el tope 8-15 era incorrecto: los NIT de personas naturales basados en cédula pueden tener 6-7 dígitos, y el 15 proviene solo del algoritmo de relleno del Módulo 11, no de la longitud real. Además, la DIAN acepta ciertos NIT especiales con ceros a la izquierda digitados en campos fijos → mejor SANITIZAR que rechazar. El usuario eligió: **10 válido + 11 como warning (informativo)**, **sanitizar ceros + avisar**, y **DIAN/RUES solo como recomendación** (no se implementa integración).

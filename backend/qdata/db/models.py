@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, Boolean, JSON, Float, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, Boolean, JSON, Float, Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import relationship
 
@@ -56,7 +56,7 @@ class Report(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    score = Column(Float)
+    score = Column(Numeric(5, 2))
     label = Column(String(20))
     result_json = Column(JSON, nullable=False)
     rule_totals = Column(JSON)
@@ -97,7 +97,7 @@ class TaskHistory(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     task_id = Column(UUID(as_uuid=True), ForeignKey("scheduled_tasks.id", ondelete="CASCADE"), nullable=False)
     status = Column(String(20))
-    score = Column(Float)
+    score = Column(Numeric(5, 2))
     error = Column(Text)
     email_sent = Column(Boolean, default=False)
     report_id = Column(UUID(as_uuid=True), ForeignKey("reports.id"))

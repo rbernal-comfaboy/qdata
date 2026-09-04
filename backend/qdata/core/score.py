@@ -7,7 +7,7 @@ WEIGHTS = {
 }
 
 
-def calculate_score(results: list[RuleResult]) -> tuple[int, str]:
+def calculate_score(results: list[RuleResult]) -> tuple[float, str]:
     total_weight = 0
     total_penalty = 0
 

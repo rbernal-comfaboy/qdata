@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Play, PauseCircle, StopCircle, Trash2, Clock, Edit3, Save, X,
-  AlertCircle, CheckCircle, Loader2, BarChart3, Plus, Activity, List,
+  AlertCircle, AlertTriangle, CheckCircle, Loader2, BarChart3, Plus, Activity, List,
   ChevronDown, ChevronRight,
 } from 'lucide-react'
 import api from '../api/client'
@@ -25,6 +25,7 @@ export default function ProcessDetail() {
   const isAdmin = currentUser?.role === 'admin'
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmReportDeleteId, setConfirmReportDeleteId] = useState<string | null>(null)
   const [showScheduleForm, setShowScheduleForm] = useState(false)
 
   const [editName, setEditName] = useState('')
@@ -151,6 +152,19 @@ export default function ProcessDetail() {
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(`/processes/${id}`),
     onSuccess: () => navigate('/processes'),
+  })
+
+  const reportDeleteMutation = useMutation({
+    mutationFn: (reportId: string) => api.delete(`/reports/${reportId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['process', id] })
+      queryClient.invalidateQueries({ queryKey: ['reports'] })
+      setConfirmReportDeleteId(null)
+    },
+    onError: (err: any) => {
+      alert(err?.response?.data?.detail || 'Error al eliminar el reporte')
+      setConfirmReportDeleteId(null)
+    },
   })
 
   const updateMutation = useMutation({
@@ -929,17 +943,38 @@ export default function ProcessDetail() {
           {reports.length > 0 ? (
             <div className="space-y-3">
               {reports.map((r: any) => (
-                <Link key={r.id} to={`/reports/${r.id}`}
+                <div key={r.id}
                   className="flex items-center justify-between p-4 rounded-xl bg-white/5 hover:bg-white/10 transition-all">
-                  <div className="flex items-center gap-4">
+                  <Link to={`/reports/${r.id}`} className="flex items-center gap-4 flex-1 min-w-0">
                     <span className={`text-xl font-bold ${r.score >= 70 ? 'text-green-400' : r.score >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>{r.score}</span>
                     <div>
                       <span className={`badge badge-${r.label === 'excelente' ? 'success' : r.label === 'critico' ? 'error' : 'warning'}`}>{r.label}</span>
                       <p className="text-xs text-muted mt-1">{formatDate(r.executed_at)}</p>
                     </div>
+                  </Link>
+                  <div className="flex items-center gap-2">
+                    <Link to={`/reports/${r.id}`} className="text-indigo-400 text-xs hover:text-indigo-300 transition-colors">Ver detalle</Link>
+                    {isAdmin && (confirmReportDeleteId === r.id ? (
+                      <div className="inline-flex items-center gap-1 bg-red-500/20 border border-red-500/30 rounded-lg px-2 py-1">
+                        <AlertTriangle className="w-3 h-3 text-red-400" />
+                        <span className="text-xs text-red-300">¿Eliminar?</span>
+                        <button onClick={() => reportDeleteMutation.mutate(r.id)} disabled={reportDeleteMutation.isPending}
+                          className="text-xs text-red-400 font-semibold px-1 hover:underline">
+                          {reportDeleteMutation.isPending ? '...' : 'Sí'}
+                        </button>
+                        <button onClick={() => setConfirmReportDeleteId(null)} className="text-xs text-muted px-1 hover:underline">
+                          No
+                        </button>
+                      </div>
+                    ) : (
+                      <button onClick={() => setConfirmReportDeleteId(r.id)}
+                        className="p-1.5 hover:bg-red-500/20 rounded-lg transition-colors text-muted hover:text-red-400"
+                        title="Eliminar reporte">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    ))}
                   </div>
-                  <span className="text-indigo-400 text-xs">Ver detalle</span>
-                </Link>
+                </div>
               ))}
             </div>
           ) : (
