@@ -1,5 +1,209 @@
 # QData Dev Log
 
+## 2026-09-11 — Fix: filtro de reglas en Estadísticas no matcheaba (clave del registry ≠ `rule_name` almacenado)
+
+**Problem**: al seleccionar "Duplicados" (o cualquier regla del grupo básico) en el filtro de Estadísticas, la gráfica quedaba vacía / sin datos. Causa raíz: `RULE_REGISTRY` está keyado por nombre lógico (`duplicates`) pero **los reportes almacenan `rule_name = <clase>.name`** (`duplicate_check`, `email_check`, `phone_check`, ...). El dropdown de Estadísticas mandaba la **clave** (`duplicates`) al SQL `rule.value->>'rule_name' IN (...)` → no matcheaba NADA (0 reglas / 0 errores). Afectaba a todas las reglas cuya clave ≠ nombre de clase (todas las básicas + email/phone/etc.).
+
+**Changes made**:
+- `backend/qdata/web/routes/rules.py` `rule_stats` y `backend/qdata/web/routes/groups.py` `list_groups`: al parsear el param `rules`, cada nombre se resuelve vía `RULE_REGISTRY[n].name` (si es clave del registry) antes de armar el `IN (...)`; los nombres ya almacenados (p.ej. `duplicate_check`) pasan tal cual. Así `?rules=duplicates` y `?rules=duplicate_check` dan el mismo resultado.
+- `backend/qdata/web/routes/rules.py` `list_rule_groups` (`GET /rules/groups`): cada regla ahora incluye `rule_name` (el nombre almacenado) además de `name` (la clave), para que el frontend haga labels legibles.
+- `frontend/src/pages/Statistics.tsx`: `ruleLabelMap` indexa por AMBOS (`rule_name` y `name`) → la gráfica de barras y los chips muestran "Duplicados" en vez de `duplicate_check`.
+
+**Verification**:
+- `GET /rules/stats?rules=duplicates` (antes Count: 0) → `{rule_name: duplicate_check, failed: 10666016, total: 20486878, pct: 52.06}`. 
+- `GET /api/groups?rules=duplicates` → 25 grupos, err=10666016, rec=20486878 (coincide con el agregado sin filtro de la regla duplicados).
+- `GET /rules/groups` → `duplicates` incluye `rule_name: duplicate_check, label: Duplicados`.
+- `npx tsc --noEmit`: limpio salvo errores pre-existentes de `@dnd-kit` en `Connections.tsx`.
+
+**Gotchas**:
+- La divergencia clave/`name` existe en TODAS las reglas básicas (`nullity`→`null_check`, `types`→`type_check`, `email_valid`→`email_check`, etc.). El resolver `RULE_REGISTRY[n].name if n in RULE_REGISTRY else n` cubre ambos sentidos sin romper `resolve_rules` (que sigue keyado por clave).
+- La verificación previa de `/rules/stats` (AGENTS 2026-09-10) usó `?rules=duplicate_check,email_check` (nombres almacenados) y por eso "funcionaba" — pero el UI mandaba claves. El bug era de discrepancia backend/frontend, no del SQL.
+- Reglas que SÍ coinciden (clave = nombre): `nit_valid`, `cedula_valid`, `personas_similares*`, `trim_check`, `special_chars`, `rfc_curp`, `drift`, `class_balance`, es por eso que "solo duplicados" parecía el problema.
+
+## 2026-09-10 — Estadísticas: filtro por grupo de análisis
+
+**Request**: agregar un filtro de grupo de análisis en Estadísticas y que se muestren solo los grupos seleccionados.
+
+**Changes made**:
+- `backend/qdata/web/routes/rules.py` `rule_stats`: nuevo query param opcional `groups` (coma-separada de ids). Se intersecta con los grupos accesibles del usuario (admin: todos; no-admin: propios+compartidos) ANTES de armar el `uuid_list` del SQL → la gráfica "Porcentaje de errores por regla" se restringe a los proyectos de los grupos elegidos.
+- `frontend/src/pages/Statistics.tsx`:
+  - Estado `selectedGroups: string[]` + `groupsOpen`; dropdown multiselect de grupos (patrón idéntico al de reglas: "Ver todos los grupos", `X` para limpiar, `ChevronDown` rotando, `FolderOpen`).
+  - `sorted` filtra `groups` por `selectedGroups` (client-side: el endpoint `/api/groups` ya trae todos los accesibles con sus agregados filtrados por período/reglas, no hace falta param ahí).
+  - Todos los KPIs (`avgAll`, `totalReports`, `totalErrorsAll`, `totalRecordsAll`, KPI "Grupos", pie, tarjetas/gauge) derivan de `sorted` filtrado.
+  - Query `['rule-stats', ..., selectedGroups.join(',')]` envía `groups` al backend.
+  - Chip "Filtrando:" ahora incluye `· X reglas/todas` y `· X grupos/todos`; estado vacío sugiere "sin filtrar por grupo".
+  - Backend `GET /api/groups` sin cambios (filtro de grupo es client-side).
+
+**Verification**:
+- `npx tsc --noEmit`: limpio salvo errores pre-existentes de `@dnd-kit` en `Connections.tsx` (documentados).
+- Backend reiniciado y healthy. `GET /rules/stats?groups=<Informix completo>` → 6 reglas solo de ese grupo (vs 9 agregadas sin filtro): `phone_check, email_check, personas_similares_v3, invalid_date_check, cedula_valid, nit_valid`.
+
+**Gotchas**:
+- El filtro de grupos para `/api/groups` es puramente client-side porque el dropdown necesita la lista COMPLETA para poder multi-seleccionar (si el backend filtrara, la lista se achicaría y se perdería la selección). El único endpoint que recibe `groups` por HTTP es `/rules/stats`.
+- `groups` va intersectado con grupos accesibles: un no-admin no puede ver reglas de grupos que no le pertenecen pasando un id arbitrario.
+
+## 2026-09-10 — Estadísticas: Score promedio general reacciona a período y reglas seleccionadas
+
+**Request**: el KPI "Score promedio general" también debe actualizarse según el período y las reglas seleccionadas.
+
+**Changes made** (solo `frontend/src/pages/Statistics.tsx` — backend sin cambios):
+- Nuevo `scoreAvgGeneral`: cuando hay reglas seleccionadas calcula el **cumplimiento general** de esas reglas agregado entre todos los grupos — `(totalRecordsAll - totalErrorsAll)/totalRecordsAll * 100` (clamp 0-100, `-` si `totalRecordsAll=0`); sin reglas conserva `avgAll` (promedio de `avg_score` por grupo, que ya respeta el período vía backend).
+- La tarjeta del KPI usa `scoreAvgGeneral` y su label cambia a "Cumplimiento general (reglas seleccionadas)" cuando hay filtro de reglas; sin reglas queda "Score promedio general".
+
+**Verification**:
+- `npx tsc --noEmit`: limpio salvo errores pre-existentes de `@dnd-kit` en `Connections.tsx` (documentados, no relacionados).
+- Semántica verificada por cálculo: con reglas el score agregado deriva de `total_errors`/`total_records` que el backend ya filtra por período y reglas en `list_groups`.
+
+**Gotchas**:
+- El UI mmuestra `-` cuando el valor es 0: con `duplicate_check` ético (pct ~100-52=48%) el cumplimiento real puede ser bajo pero >0; solo es `-` si no hay registros.
+- No es un "score" reportado: es cumplimiento agregado como score 0-100 para mantener la comparabilidad con el gauge por grupo (que ya muestra cumplimiento de reglas en esa misma métrica).
+
+## 2026-09-10 — Estadísticas: gráficas muestran el porcentaje de las reglas seleccionadas
+
+**Request**: ajustar las gráficas de la página Estadísticas para que muestren el porcentaje de las reglas que se seleccionen.
+
+**Changes made**:
+- `backend/qdata/web/routes/rules.py`: nuevo endpoint `GET /rules/stats` (`rule_stats`): devuelve por regla `{rule_name, failed, total, pct}` sobre el reporte más reciente de cada proyecto (CTE `latest` + `DISTINCT ON (r.project_id)`), acotado a los grupos del usuario (admin: todos; no-admin: propios + compartidos vía `GroupPermission`) y con los mismos filtros opcionales `start`/`end` (período) y `rules` (coma-separada; aplica `rule.value->>'rule_name' IN (...)` en el WHERE externo tras el lateral). `pct = failed/total*100` redondeado a 2. Import de `datetime`, `or_`, `text`, `AnalysisGroup`, `GroupPermission`, `Project`, `Report` agregado.
+- `frontend/src/pages/Statistics.tsx`:
+  - Nuevo query `['rule-stats', start, end, selectedRules]` → `GET /rules/stats` (mismos filtros).
+  - **Gráfica nueva "Porcentaje de errores por regla"** (BarChart vertical, scroll `max-h-96`): una barra por regla con su `pct%` (labels legibles vía `ruleLabelOf` desde `ruleOptions`); si no hay reglas seleccionadas muestra las 15 con mayor pct (con nota), si hay selección muestra SOLO esas y lista sus labels.
+  - **Pie** ahora es contextual: sin reglas → "Comparativa de Scores por Grupo" (avg_score); con reglas → "Errores de las reglas seleccionadas por grupo (%)" (value = `total_errors/total_records*100` por grupo, filtrados por el backend).
+  - **Tarjetas/gauge por grupo**: con reglas seleccionadas el `QualityGauge` pasa de mostrar `avg_score` a mostrar el **cumplimiento** de las reglas seleccionadas (`(records-errors)/records*100`, clamp 0-100) con caption "cumplimiento: reglas seleccionadas"; el footer `err/reg/(pct%)` queda igual.
+
+**Verification**:
+- Backend reiniciado y healthy. `GET /rules/stats` (token): sin filtros → 9 reglas agregadas (p.ej. `duplicate_check failed=10.666M total=20.486M pct=52.06%`, `phone_check 4.79%`); `?rules=duplicate_check,email_check` → solo esas dos; `?start=<7 días>&rules=duplicate_check` → `failed=17862 total=1397421 pct=1.28%`. Período+reglas combinados OK.
+- `npx tsc --noEmit`: limpio salvo errores pre-existentes de `@dnd-kit` en `Connections.tsx` (documentados, no relacionados).
+
+**Gotchas**:
+- `rule_stats` reusa la misma semántica del dashboard: UN reporte (el más reciente dentro del período) por proyecto, y `COALESCE(rule_totals::jsonb, result_json->'results')` para reportes viejos sin `rule_totals`.
+- El bar chart vertical usa `Math.max(ruleBarData.length * 42, 220)` de altura: con las 15 reglas top (~630px) el contenedor con `overflow-y-auto` evita desbordar la página.
+- El pie con reglas filtra `sorted.filter((g) => g.total_records > 0)` (grupos sin datos de las reglas seleccionadas no participan); el label del tooltip del pie cambia a "Errores (reglas seleccionadas)".
+- `QualityGauge` toma 0-100; `passPct` se clampa a [0,100] por si `failed > total` en datos anómalos.
+
+## 2026-09-10 — Estadísticas: filtro por período y por reglas (una o varias)
+
+**Request**: en la página Estadísticas permitir seleccionar un período (rango de fechas) y seleccionar las reglas para ver estadísticas por una o varias reglas.
+
+**Changes made**:
+- `backend/qdata/web/routes/groups.py` `list_groups`: nuevos query params opcionales `start`/`end` (ISO datetime) y `rules` (coma-separada). `period_conds` se aplican a los subqueries ORM de `report_count`, `last_analysis` y `avg_score` (filtra reportes por `executed_at`). El SQL raw de agregación (`latest` CTE + `DISTINCT ON (r.project_id)`) recibe `start_ts`/`end_ts` como bound params en el WHERE del CTE (sigue eligiendo el reporte más reciente por proyecto DENTRO del período), y el filtro de reglas `rule.value->>'rule_name' IN (...)` (bound params) va en el WHERE del query EXTERNO (después del `CROSS JOIN LATERAL jsonb_array_elements`), NO dentro del CTE (ahí `rule` no existe). Semántica: período afecta todos los agregados por grupo (counts, avg score, errores); reglas solo afectan errores/registros analizados (subconjunto de reglas por reporte).
+- `frontend/src/pages/Statistics.tsx` (reescrito): barra de controles en `GlassContainer` — selector de período (`select` con Todo/7/30/90 días/Este año/Rango personalizado; custom muestra dos `<input type="date">`) y multi-select de reglas (`dropdown` con checkboxes alimentado de `/api/rules/groups` via `queryKey ['rules-groups']`, con "Ver todas las reglas" y limpiar con `X`). El query `['groups', start ?? '', end ?? '', selectedRules.join(',')]` envía `start`/`end` (`toISOString()` UTC) y `rules` solo si hay selección. KPIs "Reportes totales" y "Errores" reaccionan al filtro; label del KPI de errores cambia a "(reglas seleccionadas)"; chips "Filtrando: <período>" y "X errores en Y registros analizados" cuando hay filtros; estado vacío diferenciado cuando los filtros no devuelven datos.
+
+**Verification**:
+- Backend reiniciado (`docker restart qdata-backend`) y healthy.
+- API con token (demo@qdata.com): baseline 25 grupos (err 11.33M, rec 64.4M); `?rules=duplicate_check,email_check,nit_valid` → err 10.86M, rec 31.64M (solo las reglas seleccionadas); `?start=<hace 30 días UTC>` → `report_count` sum 158 y err 381K (solo reportes del período), p.ej. "Informix completo" reports=7.
+- `npx tsc --noEmit`: limpio salvo errores pre-existentes de `@dnd-kit` en `Connections.tsx` (documentados, no relacionados).
+
+**Gotchas**:
+- El filtro de reglas NO puede ir en el WHERE del CTE `latest`: `rule` viene del lateral del query externo (`CROSS JOIN LATERAL jsonb_array_elements(l.rule_data) AS rule`), que no existe en el scope del CTE → error "missing FROM-clause entry". Va en el WHERE externo, antes del `GROUP BY`.
+- `period_conds` se pasan con `*period_conds` dentro de `.where(...)`; si la lista está vacía el `.where` queda con los conds originales (no se rompe). `Report.executed_at` es `DateTime(timezone=True)` con `datetime.utcnow` (naive UTC); frontend manda `toISOString()` (UTC aware) y la comparación es correcta en PostgreSQL timestamptz.
+- El agregado por reglas usa el reporte más reciente por proyecto dentro del período (misma semántica `DISTINCT ON` que el baseline), así que cada proyecto aporta UNA fila de `rule_data` aunque tenga muchos reportes.
+- `rule_totals` puede ser NULL en reportes viejos → el `COALESCE(r.rule_totals::jsonb, r.result_json::jsonb->'results')` cae a los `results` del JSON (misma clave `rule_name`), el filtro funciona igual.
+
+## 2026-09-10 — Primer clic a un proceso dejaba pantalla en blanco: `TypeError: Cannot read properties of undefined (reading 'group_id')` en el primer render
+
+**Problem**: tras el fix de rutas (refresco OK), al entrar a un proceso por primer clic la pantalla quedaba en blanco "congelada" y solo reaparecía tras refrescar (y a veces igual). Con un ErrorBoundary global (nuevo) quedó visible la causa: `TypeError: Cannot read properties of undefined (reading 'group_id')` en `ProcessDetail.tsx:225` (`currentGroupName`). La causa raíz: `currentGroupName = analysisGroups.find(g => g.id === process.group_id)` se evalúa en el cuerpo del componente ANTES de los `return` tempranos de carga (`isLoading`), así que en el primer render (query aún cargando, `process === undefined`) lanzaba TypeError → sin ErrorBoundary, React 19 pinta pantalla en blanco que solo un reload limpia. En el refresco a veces el dato llegaba antes del commit del primer render y por eso "funcionaba" (inconsistente).
+
+**Changes made**:
+- `frontend/src/components/ErrorBoundary.tsx` (NUEVO): ErrorBoundary de clase que muestra mensaje + stack del error (y botón Reintentar) en vez de pantalla en blanco. Se envuelven las rutas en `frontend/src/App.tsx` (`<ErrorBoundary>` dentro del `<Suspense>`). Previene futuros "congelamientos" sin diagnostico visible.
+- `frontend/src/pages/ProcessDetail.tsx:225`: `process.group_id` → `process?.group_id` (igual ya pasaba con `process?.status` en línea 248). Ahora el render de carga no crashea: muestra los skeletons hasta que el query resuelve.
+
+**Verification**:
+- `npx tsc --noEmit`: limpio salvo errores pre-existentes de `@dnd-kit` en `Connections.tsx` (documentados, no relacionados).
+- Con el ErrorBoundary activo, el primer clic mostraba la tarjeta roja con el stack exacto del crash; tras el guard, el primer render de carga muestra skeleton y luego el detalle sin error.
+
+**Gotchas**:
+- React evalúa TODO el cuerpo de la función componente en cada render, incluido código que está "antes" de los `return` de estados de carga — cualquier acceso a `process.x` (dato del `useQuery`) sin `?.` crashea en el primer render, ANTES de llegar al branch de `isLoading`.
+- El ErrorBoundary global es permanente y deliberado: convierte cualquier futura pantalla en blanco en un error legible en pantalla.
+
+## 2026-09-10 — Pantalla congelada / `{"detail":"Not authenticated"}` al actualizar: choque de rutas SPA con el proxy de vite
+
+**Problem**: NAVEGAR funcionaba, pero al **refrescar** (F5) cualquier página profunda (p. ej. `/processes/{id}`, `/reports/{id}`, `/analyze/{id}`, `/scheduler/new`, `/datasources/new`, `/rules`, `/admin/users`) aparecía el JSON crudo `{"detail":"Not authenticated"}` — mientras que navegar por clic funcionaba normal. No se arreglaba re-iniciando sesión. Causa raíz: el dev server de vite proxya `/processes`, `/reports`, `/analyze`, `/rules`, `/scheduler`, `/datasources`, `/admin` al backend (`vite.config.ts`), y esas mismas rutas son rutas de React Router. Al refrescar, el navegador hace UNA NAVEGACIÓN (sin header `Authorization`, `Accept: text/html`) a `/processes/{id}`; vite la reenvía al backend → FastAPI exige token (`HTTPBearer` → `403 Not authenticated` si no hay header) → el navegador pinta el JSON crudo. Producción (nginx, `docker-compose.prod.yml`) NO tiene el problema: proxya solo `/api/` + `/ws/` y sirve el SPA con `try_files ... /index.html`.
+
+**Changes made** (solo `frontend/vite.config.ts`):
+- Nuevo plugin `spaFallbackBeforeProxy` (antes de los middlewares internos de vite): si `req.headers.accept` incluye `text/html` (navegación real del browser) y el path cae en un prefijo proxy (`/^\/(processes|analyze|reports|rules|scheduler|datasources|admin)(\/|$)/`), reescribe `req.url = '/'` para que vite sirva `index.html` y el proxy nunca vea esa petición. Las llamadas axios (`Accept: application/json, text/plain, */*`) NO se tocan y siguen proxeando al backend con su `Authorization` header.
+
+**Verification**:
+- `curl`/`Invoke-WebRequest` con `Accept: text/html` a `/processes/{uuid}`, `/reports/x`, `/analyze/x`, `/rules`, `/scheduler/new`, `/datasources/new`, `/datasources/x/edit`, `/admin/users` → todos `200` con `id="root"` (SPA), sin JSON de error.
+- API real con token (`POST /auth/login` demo@qdata.com + `GET /processes/{id}` vía `localhost:5173`) → `200` JSON del proceso (el proxy sigue funcionando).
+- Backend sin cambios en este fix; `docker restart qdata-frontend` para cargar la nueva config de vite.
+
+**Gotchas**:
+- El discriminador es el header `Accept`: navegación envía `text/html`; axios envía `application/json, text/plain, */*`. Los favicon/asset requests no caen en los prefijos proxy.
+- El middleware debe registrarse DENTRO de `configureServer` (sin `return () => ...`) para ejecutarse ANTES del proxy interno de vite; con el return se registra después y no alcanza a interceptar.
+- `/processes/{id}` es a la vez API y ruta SPA: era imposible distinguirlas por URL; el `Accept` lo resuelve.
+- El SSE (`/analyze/{id}/stream`) no pasa por vite: usa `VITE_API_URL || http://localhost:8000` directo al backend (puerto host expuesto).
+
+## 2026-09-10 — Sesión expirada dejaba la pantalla congelada (401/403); sesión extendida a 7 días
+
+**Problem**: al entrar a un proceso, la pantalla quedaba "parada" y al refrescar aparecía `{"detail":"Not authenticated"}`. Causa raíz: el token de sesión caducaba a las 24h (`jwt_expire_minutes=1440`) y, al expirar, unas peticiones devolvían `401 Invalid token` (token presente pero vencido) y otras `403 Not authenticated` (FastAPI `HTTPBearer` sin header). El interceptor de axios solo redirigía a `/login` en `401`, así que el `403 Not authenticated` no se manejaba y el SSE (`/analyze/{id}/stream`) entraba en bucle de reconexión — resultado: pantalla congelada con el error crudo. Verificado en logs del backend: la sesión del usuario daba `401` en `GET /processes` y `GET /processes/{id}` mientras otras sesiones seguían en `200`.
+
+**Changes made**:
+- `backend/qdata/core/config.py`: `jwt_expire_minutes: int = 1440` → `10080` (7 días). Oficializado dentro del contenedor: `settings.jwt_expire_minutes == 10080`.
+- `frontend/src/api/client.ts`: el interceptor de respuesta ahora redirige a `/login` (limpia `qdata_token`) también en `403` cuando `detail === 'Not authenticated'`, no solo en `401`.
+- `frontend/src/pages/ProcessDetail.tsx` (SSE): se agrega `streamOpened`; si el stream emite `error` **antes de abrirse** (p. ej. token inválido → el backend lo rechaza de inmediato), se cierra y NO se reconecta (antes entraba en bucle). Si ya se abrió, se conserva el comportamiento previo (cerrar solo al llegar a estado terminal; reconexión automática ante drops transitorios).
+
+**Verification**:
+- `npx tsc --noEmit`: limpio salvo errores pre-existentes de `@dnd-kit` en `Connections.tsx` (documentados, no relacionados).
+- Backend reiniciado (`docker restart qdata-backend`) y healthy (`/health` → `{"status":"ok"}`).
+- Nota: los tokens viejos conservan su `exp` original; el nuevo login de un usuario genera token con 7 días.
+
+**Gotchas**:
+- `HTTPBearer(auto_error=True)` (usado por `get_current_user`) devuelve **403** `Not authenticated` cuando no llega header — por eso el interceptor debe mirar también `status===403`; los `401` son del decode fallido (`Invalid token`).
+- El `exp` del SSE logueado (`1789142280` → 2026-09-11 10:58 local) era correcto para esa sesión; la falla era SOLO de la sesión del navegador con token vencido, no del backend.
+- `model_config = {"env_prefix": "qdata_", "env_file": ".env"}` permite override vía `QDATA_JWT_EXPIRE_MINUTES` sin tocar código.
+
+## 2026-09-10 — ProcessDetail: "Editar" inline se convierte en "Ver Parámetros" (solo lectura)
+
+**Request**: el usuario preguntó por qué salían dos botones en el detalle de proceso ("Editar en Análisis" y "Editar"). Decisión: la edición real se hace única y exclusivamente en la página completa de Análisis (`/analyze/{id}`); el botón "Editar" inline se transforma en **"Ver Parámetros"** — un visor de solo lectura de los parámetros del análisis, sin formulario editable ni PUT.
+
+**Changes made** (solo `frontend/src/pages/ProcessDetail.tsx` — backend sin cambios):
+- Import de lucide-react: se quitan `Edit3` y `Save`, se agrega `Eye` (se conservan `X`, `ChevronDown`/`ChevronRight` que usan los logs).
+- Estado `editing` → `viewingParams`; botón cabecera "Editar" → "Ver Parámetros" (`Eye`); en modo `viewingParams` la cabecera muestra "Editar en Análisis" (enlace a `/analyze/{id}`) + "Cerrar".
+- Se eliminan: `updateMutation` (PUT), `handleSave`, `toggleGroup`/`toggleRule`/`toggleExpand`, `expandedGroups` y los 9 estados `edit*` (`editName/editSourceType/editConnStr/editQuery/editFilePath/editSelectedColumns/editRules/editRuleConfigs/editGroupId`). `showParams` ahora solo hace `setViewingParams(true)`.
+- El formulario editable (inputs/selects/checkboxes) se reemplaza por una vista read-only "Parámetros del Análisis": nombre, tipo de fuente, connection string/archivo/consulta (mono con `pre`), chips de columnas seleccionadas, resumen de `rule_configs` vía `formatRuleConfigSummary` (ahora muestra `ruleLabel` con el nombre legible de regla en vez de la clave), grupo de análisis (`currentGroupName` resuelto desde `/api/groups`) y chips de reglas de validación (`ruleLabel` resuelto desde `/rules/groups`).
+- Nuevos helpers `ruleLabel(name)` (busca el label en `groups` de `/rules/groups`) y `currentGroupName` (nombre del grupo desde `analysisGroups`); las queries `['rules-groups']` y `['groups']` se mantienen (antes `enabled: editing`, ahora `enabled: viewingParams`) porque la vista read-only las usa.
+- `formatRuleConfigSummary` conserva su lógica (modo/sensibilidad/columnas/pesos V1-V3, check_digit NIT, columnas duplicate_check) y se reusa en la vista read-only.
+
+**Verification**:
+- `npx tsc --noEmit`: limpio salvo errores pre-existentes de `@dnd-kit` en `Connections.tsx` (documentados, no relacionados). Se tiparon `(c: string)` y `(r: string)` en los `.map` nuevos (evitar `implicit any`).
+- Frontend es dev server (vite `--host 0.0.0.0`), los cambios se reflejan sin rebuild.
+
+**Gotchas**:
+- La vista read-only renderiza directo de `process.source_config` / `process.rule_configs` / `process.rules_config`; no hay estado derivado que validar a la hora de abrir/cerrar.
+- `ruleLabel` hace línea en `groups` (de `/rules/groups`); si `rulesData` aún no carga, cae al nombre crudo de la regla (no bloquea el render).
+- El resumen principal (cuando `viewingParams=false`) queda igual: tarjeta con nombre + tipo de fuente + reglas + connection/query.
+- La única vía de edición es ahora "Editar en Análisis" → `/analyze/{id}` (PUT completo con `selected_columns` y `rule_configs`).
+
+## 2026-09-10 — Editar proceso: pre-carga de fuente, campos seleccionados y rule_configs (doble vía)
+
+**Problem**: al editar un proceso, el formulario de edición inline en `ProcessDetail.tsx` no mostraba la fuente de datos ni los campos seleccionados. Causas raíz: (1) `handleEdit` cargaba solo 5 campos de `source_config` (source_type/connection_string/query/file_path) y **ignoraba `selected_columns`** — aunque `GET /processes/{id}` lo devuelve; (2) `rule_configs` (modo V1/V2/V3, umbral, pesos, toggle NIT) tampoco se cargaba ni se mostraba; (3) `handleSave` reconstruía `source_config` con 4 campos y **destruía `selected_columns`** al guardar; (4) `rule_configs` no se podía guardar porque `UpdateProcessRequest` no lo aceptaba; (5) `Analyze.tsx` era 100% create-only (sin ruta de edición, sin pre-carga de proceso existente).
+
+**Changes made**:
+- `backend/qdata/web/routes/processes.py`: `UpdateProcessRequest` agrega `rule_configs: dict | None = None`; handler `update_process` persiste `project.rule_configs = req.rule_configs` si llega.
+- `frontend/src/App.tsx`: nueva ruta `<Route path="analyze/:id">` (misma página Analyze).
+- `frontend/src/pages/Analyze.tsx` (modo edición completo — pre-carga TODO el formulario):
+  - `useParams` → `editId`; query `['process', editId]` cargado con `enabled: isEdit`; query `['source', sourceId]` trae `connection_string`/`file_path` del DataSource (necesario porque el PUT lleva el `source_config` completo a diferencia del POST que solo lleva `source_id`).
+  - Efecto de pre-fill (guardado en `editPrefilledRef`): nombre, `rules_config`, `group_id`, grupos expandidos (al usar `[rulesData]` ya NO auto-selecciona todas al entrar en modo edición), `selected_columns`, y deserializa `rule_configs` → mode/threshold (V1/V2/V3), `v2Columns`/`v2Weights` (pesos fraccionales *100), `nitValid.check_digit`. Matching de fuente por `source_type` + `query` contra la lista de Sources; si no hay match, se mantienen los parámetros guardados de `source_config` (no bloquea guardar).
+  - Efectos de auto-threshold (`[similaresMode]`/`[v3Mode]`) y de preview-columns ahora respetan `editPrefilledRef` (y en edición, si el usuario cambia de fuente manualmente vía dropdown, las columnas se re-seleccionan).
+  - `handleSubmit` ramifica: modo edición → `PUT /processes/{id}` con `{name, source_config{...preserva selected_columns}, rules_config, rule_configs, group_id}`; modo creación → POST igual que antes. Título dinámico "Editar Análisis" / "Nuevo Análisis", botón "Guardar Cambios" / "Ejecutar Análisis", banner de error si `GET` falla en edición.
+- `frontend/src/pages/ProcessDetail.tsx` (edit inline corregido):
+  - Nuevos estados `editSelectedColumns` y `editRuleConfigs`, cargados en `handleEdit` desde `process.source_config.selected_columns` y `process.rule_configs`.
+  - `handleSave` ahora incluye `selected_columns` dentro de `source_config` (condicional) y envía `rule_configs`.
+  - Formulario de edición: sección "Columnas seleccionadas" (chips read-only + link "Cambiar en Análisis..." a `/analyze/{id}`) y "Configuración de reglas" (resumen legible por regla vía `formatRuleConfigSummary`: modo/sensibilidad/columnas/pesos para V1/V2/V3, "dígito de verificación: Sí/No" para NIT, columnas para duplicate_check).
+  - Botón "Editar en Análisis" (`ExternalLink`) en la cabecera junto a "Editar", que navega a la página completa de Analyze en modo edición.
+
+**Verification**:
+- `npx tsc --noEmit`: limpio salvo errores pre-existentes de `@dnd-kit` en `Connections.tsx` (documentados, no relacionados).
+- Backend reiniciado (`docker restart qdata-backend`) y healthy; `UpdateProcessRequest.model_fields = ['name','source_config','rules_config','rule_configs','group_id']` (verificado dentro del contenedor).
+- Frontend dev server (vite) recarga los cambios sin rebuild.
+
+**Gotchas**:
+- El PUT de edición lleva el `source_config` **completo** (a diferencia del POST que manda `source_id` y el backend resuelve): por eso frontend necesita `GET /sources/{id}` para obtener `connection_string`/`file_path` del DataSource actual al editar.
+- `editPrefilledRef` queda en `true` después del pre-fill a propósito: evita que los efectos derivados (auto-threshold al cambiar modo, columns al cargar preview) pisen los valores guardados. En modo edición cambiar el chip de modo de V1/V3 ya no auto-ajusta el umbral (el slider sigue disponible).
+- El pre-fill ignora `sources` si `rulesData` aún no cargó (deps `[existingProcess, sources, rulesData]`); es idempotente, re-aplica los mismos valores sin efecto visible.
+- Si la fuente original fue eliminada o su query cambió, no hay match → `sourceId` vacío y sin preview, pero el botón "Guardar Cambios" sigue habilitado (debe haber `existingProcess`), preservando el `source_config` guardado.
+- Grupos expandidos en edición: el efecto `[rulesData]` retorna temprano (`if (isEdit) return`), por eso el pre-fill fija `expandedGroups` expandidos a partir de `rulesData`; si `rulesData` aterriza después, el pre-fill se re-ejecuta (idempotente).
+
 ## 2026-09-02 — Eliminar reporte desde el Detalle de Proceso (botón en la esquina derecha)
 
 **Request**: poder eliminar un reporte dentro de todos los grupos de análisis, con un botón en la esquina derecha. El usuario eligió ubicarlo en **Detalle de Proceso** (lista "Reportes (n)") y que solo **admin** pueda eliminar (el endpoint `DELETE /reports/{id}` ya exige `require_role(["admin"])`).

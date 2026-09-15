@@ -2,9 +2,9 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, Play, PauseCircle, StopCircle, Trash2, Clock, Edit3, Save, X,
+  ArrowLeft, Play, PauseCircle, StopCircle, Trash2, Clock, Eye, X,
   AlertCircle, AlertTriangle, CheckCircle, Loader2, BarChart3, Plus, Activity, List,
-  ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight, ExternalLink,
 } from 'lucide-react'
 import api from '../api/client'
 import GlassContainer from '../components/layout/GlassContainer'
@@ -23,19 +23,10 @@ export default function ProcessDetail() {
   const queryClient = useQueryClient()
   const currentUser = useAuthStore((s) => s.user)
   const isAdmin = currentUser?.role === 'admin'
-  const [editing, setEditing] = useState(false)
+  const [viewingParams, setViewingParams] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmReportDeleteId, setConfirmReportDeleteId] = useState<string | null>(null)
   const [showScheduleForm, setShowScheduleForm] = useState(false)
-
-  const [editName, setEditName] = useState('')
-  const [editSourceType, setEditSourceType] = useState('')
-  const [editConnStr, setEditConnStr] = useState('')
-  const [editQuery, setEditQuery] = useState('')
-  const [editFilePath, setEditFilePath] = useState('')
-  const [editRules, setEditRules] = useState<string[]>([])
-  const [editGroupId, setEditGroupId] = useState<string>('')
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
   const esRef = useRef<EventSource | null>(null)
   const logsEndRef = useRef<HTMLDivElement | null>(null)
@@ -65,13 +56,13 @@ export default function ProcessDetail() {
   const { data: rulesData } = useQuery({
     queryKey: ['rules-groups'],
     queryFn: () => api.get('/rules/groups').then((r) => r.data),
-    enabled: editing,
+    enabled: viewingParams,
   })
 
   const { data: analysisGroups = [] } = useQuery({
     queryKey: ['groups'],
     queryFn: () => api.get('/api/groups').then((r) => r.data),
-    enabled: editing,
+    enabled: viewingParams,
   })
 
   const groups = (rulesData?.groups ?? []).filter((g: any) => g.name !== 'todo')
@@ -86,6 +77,11 @@ export default function ProcessDetail() {
     const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
     const es = new EventSource(`${baseUrl}/analyze/${id}/stream?token=${token}`)
     esRef.current = es
+    let streamOpened = false
+
+    es.addEventListener('open', () => {
+      streamOpened = true
+    })
 
     es.addEventListener('progress', (e) => {
       try {
@@ -125,6 +121,11 @@ export default function ProcessDetail() {
     })
 
     es.addEventListener('error', () => {
+      if (!streamOpened) {
+        es.close()
+        esRef.current = null
+        return
+      }
       const current = queryClient.getQueryData(['process', id]) as any
       if (current?.status === 'completed' || current?.status === 'failed' || current?.status === 'cancelled') {
         es.close()
@@ -164,14 +165,6 @@ export default function ProcessDetail() {
     onError: (err: any) => {
       alert(err?.response?.data?.detail || 'Error al eliminar el reporte')
       setConfirmReportDeleteId(null)
-    },
-  })
-
-  const updateMutation = useMutation({
-    mutationFn: (data: any) => api.put(`/processes/${id}`, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['process', id] })
-      setEditing(false)
     },
   })
 
@@ -217,45 +210,39 @@ export default function ProcessDetail() {
     }
   }
 
-  const handleEdit = () => {
-    const sc = process.source_config || {}
-    setEditName(process.name)
-    setEditSourceType(sc.source_type || '')
-    setEditConnStr(sc.connection_string || '')
-    setEditQuery(sc.query || '')
-    setEditFilePath(sc.file_path || '')
-    setEditRules(process.rules_config || [])
-    setEditGroupId(process.group_id || '')
-    setEditing(true)
+  const showParams = () => {
+    setViewingParams(true)
   }
 
-  const handleSave = () => {
-    updateMutation.mutate({
-      name: editName,
-      source_config: { source_type: editSourceType, connection_string: editConnStr, query: editQuery, file_path: editFilePath },
-      rules_config: editRules,
-      group_id: editGroupId || null,
-    })
-  }
-
-  const toggleGroup = (groupName: string, rules: any[]) => {
-    const ruleNames = rules.map((r: any) => r.name)
-    const allSelected = ruleNames.every((r: string) => editRules.includes(r))
-    if (allSelected) {
-      setEditRules(editRules.filter((r: string) => !ruleNames.includes(r)))
-    } else {
-      const newRules = [...editRules]
-      ruleNames.forEach((r) => { if (!newRules.includes(r)) newRules.push(r) })
-      setEditRules(newRules)
+  const ruleLabel = (name: string) => {
+    for (const g of groups) {
+      const r = g.rules.find((r: any) => r.name === name)
+      if (r) return r.label
     }
+    return name
   }
 
-  const toggleRule = (ruleName: string) => {
-    setEditRules((prev) => prev.includes(ruleName) ? prev.filter((r) => r !== ruleName) : [...prev, ruleName])
-  }
+  const currentGroupName = analysisGroups.find((g: any) => g.id === process?.group_id)?.name || 'Sin grupo'
 
-  const toggleExpand = (groupName: string) => {
-    setExpandedGroups((prev) => ({ ...prev, [groupName]: !prev[groupName] }))
+  const formatRuleConfigSummary = (rule: string, cfg: any): string => {
+    if (!cfg || typeof cfg !== 'object') return '{}'
+    switch (rule) {
+      case 'personas_similares':
+      case 'personas_similares_v2':
+      case 'personas_similares_v3':
+        return [
+          cfg.mode ? `modo: ${cfg.mode}` : '',
+          cfg.threshold != null ? `sensibilidad: ${Math.round(cfg.threshold * 100)}%` : '',
+          Array.isArray(cfg.columns) && cfg.columns.length ? `columnas: ${cfg.columns.join(', ')}` : '',
+          cfg.weights ? `pesos: ${Object.entries(cfg.weights).map(([k, v]) => `${k}=${Math.round((v as number) * 100)}%`).join(', ')}` : '',
+        ].filter(Boolean).join(' · ')
+      case 'nit_valid':
+        return `dígito de verificación: ${cfg.check_digit ? 'Sí' : 'No'}`
+      case 'duplicate_check':
+        return Array.isArray(cfg.columns) && cfg.columns.length ? `columnas: ${cfg.columns.join(', ')}` : ''
+      default:
+        return JSON.stringify(cfg)
+    }
   }
 
   const isRunning = process?.status === 'running' || process?.status === 'pending' || process?.status === 'paused' || process?.status === 'loading'
@@ -323,24 +310,27 @@ export default function ProcessDetail() {
           Volver a procesos
         </Link>
         <div className="flex items-center gap-2">
-          {editing ? (
+          {viewingParams ? (
             <>
-              <button onClick={handleSave} disabled={updateMutation.isPending}
-                className="btn-primary flex items-center gap-2 text-sm">
-                <Save className="w-4 h-4" />
-                {updateMutation.isPending ? 'Guardando...' : 'Guardar'}
-              </button>
-              <button onClick={() => setEditing(false)} className="btn-ghost flex items-center gap-2 text-sm">
+              <Link to={`/analyze/${id}`} className="btn-ghost flex items-center gap-2 text-sm">
+                <ExternalLink className="w-4 h-4" />
+                Editar en Análisis
+              </Link>
+              <button onClick={() => setViewingParams(false)} className="btn-ghost flex items-center gap-2 text-sm">
                 <X className="w-4 h-4" />
-                Cancelar
+                Cerrar
               </button>
             </>
           ) : !isRunning ? (
             <>
-              <button onClick={handleEdit} className="btn-ghost flex items-center gap-2 text-sm">
-                <Edit3 className="w-4 h-4" />
-                Editar
+              <button onClick={showParams} className="btn-ghost flex items-center gap-2 text-sm">
+                <Eye className="w-4 h-4" />
+                Ver Parámetros
               </button>
+              <Link to={`/analyze/${id}`} className="btn-ghost flex items-center gap-2 text-sm">
+                <ExternalLink className="w-4 h-4" />
+                Editar en Análisis
+              </Link>
               <button onClick={() => rerunMutation.mutate()} disabled={rerunMutation.isPending}
                 className="btn-ghost flex items-center gap-2 text-sm">
                 <Play className="w-4 h-4" />
@@ -671,101 +661,79 @@ export default function ProcessDetail() {
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
           <GlassContainer className="lg:col-span-2">
-            {editing ? (
-              <div className="space-y-4">
-                <h2 className="text-xl font-bold">Editar Proceso</h2>
+            {viewingParams ? (
+              <div className="space-y-5">
+                <h2 className="text-xl font-bold">Parámetros del Análisis</h2>
+
                 <div>
                   <label className="block text-sm text-muted mb-1">Nombre</label>
-                  <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} className="glass-input" />
+                  <p className="font-medium">{process.name}</p>
                 </div>
                 <div>
                   <label className="block text-sm text-muted mb-1">Tipo de fuente</label>
-                  <select value={editSourceType} onChange={(e) => setEditSourceType(e.target.value)} className="glass-input">
-                    <option value="postgresql">PostgreSQL</option>
-                    <option value="mysql">MySQL</option>
-                    <option value="sqlserver">SQL Server</option>
-                    <option value="oracle">Oracle</option>
-                    <option value="informix">Informix</option>
-                    <option value="sqlite">SQLite</option>
-                    <option value="csv">CSV</option>
-                    <option value="excel">Excel</option>
-                    <option value="json">JSON</option>
-                    <option value="parquet">Parquet</option>
-                  </select>
+                  <p className="font-medium">{sc.source_type}</p>
                 </div>
+                {sc.connection_string && (
+                  <div>
+                    <label className="block text-sm text-muted mb-1">Connection String</label>
+                    <p className="font-mono text-xs break-all">{sc.connection_string}</p>
+                  </div>
+                )}
+                {sc.file_path && (
+                  <div>
+                    <label className="block text-sm text-muted mb-1">Archivo (path en servidor)</label>
+                    <p className="font-mono text-xs break-all">{sc.file_path}</p>
+                  </div>
+                )}
+                {sc.query && (
+                  <div>
+                    <label className="block text-sm text-muted mb-1">Consulta SQL</label>
+                    <pre className="font-mono text-xs whitespace-pre-wrap break-all bg-white/5 rounded-lg p-2 text-white/85">{sc.query}</pre>
+                  </div>
+                )}
+
                 <div>
-                  <label className="block text-sm text-muted mb-1">Connection String</label>
-                  <input type="text" value={editConnStr} onChange={(e) => setEditConnStr(e.target.value)} className="glass-input font-mono text-sm" placeholder="postgresql://user:pass@host:5432/db" />
+                  <label className="block text-sm text-muted mb-1">Columnas seleccionadas</label>
+                  {(sc.selected_columns || []).length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {(sc.selected_columns || []).map((c: string) => (
+                        <span key={c} className="text-[11px] px-2 py-0.5 rounded-full bg-white/10 text-white/80">{c}</span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted">Sin selección — se usan todas las columnas de la consulta.</p>
+                  )}
                 </div>
-                <div>
-                  <label className="block text-sm text-muted mb-1">Archivo (path en servidor)</label>
-                  <input type="text" value={editFilePath} onChange={(e) => setEditFilePath(e.target.value)} className="glass-input font-mono text-sm" placeholder="/tmp/qdata_uploads/archivo.xlsx" />
-                </div>
-                <div>
-                  <label className="block text-sm text-muted mb-1">Consulta SQL</label>
-                  <textarea value={editQuery} onChange={(e) => setEditQuery(e.target.value)} className="glass-input font-mono text-sm min-h-[80px]" />
-                </div>
+
+                {Object.keys(process.rule_configs || {}).length > 0 && (
+                  <div>
+                    <label className="block text-sm text-muted mb-1">Configuración de reglas</label>
+                    <div className="space-y-1">
+                      {Object.entries(process.rule_configs || {}).map(([rule, cfg]) => (
+                        <div key={rule} className="text-xs bg-white/5 rounded-lg p-2">
+                          <span className="font-semibold text-white/90">{ruleLabel(rule)}</span>{' '}
+                          <span className="text-muted">{formatRuleConfigSummary(rule, cfg)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-sm text-muted mb-1">Grupo de análisis</label>
-                  <select value={editGroupId} onChange={(e) => setEditGroupId(e.target.value)} className="glass-input">
-                    <option value="">Sin grupo</option>
-                    {analysisGroups.map((g: any) => (
-                      <option key={g.id} value={g.id}>{g.name}</option>
-                    ))}
-                  </select>
+                  <p className="font-medium">{currentGroupName}</p>
                 </div>
 
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm text-muted">Reglas de validación</label>
-                    <span className="text-xs text-muted">{editRules.length}/{groups.reduce((s: number, g: any) => s + g.rules.length, 0)}</span>
-                  </div>
-                  <div className="flex gap-2 mb-3">
-                    <button onClick={() => setEditRules([...new Set<string>(groups.flatMap((g: any) => g.rules.map((r: any) => r.name as string)))])}
-                      className="text-xs px-3 py-1 rounded-full bg-white/10 hover:bg-white/20 transition-colors">Todas</button>
-                    <button onClick={() => setEditRules([])}
-                      className="text-xs px-3 py-1 rounded-full bg-white/10 hover:bg-white/20 transition-colors">Ninguna</button>
-                  </div>
-                  <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
-                    {groups.map((group: any) => {
-                      const ruleNames = group.rules.map((r: any) => r.name)
-                      const allSelected = ruleNames.every((r: string) => editRules.includes(r))
-                      const someSelected = ruleNames.some((r: string) => editRules.includes(r))
-                      const isExpanded = expandedGroups[group.name] ?? true
-                      return (
-                        <div key={group.name} className="rounded-lg bg-white/5 overflow-hidden">
-                          <div className="flex items-center gap-2 p-2">
-                            <button onClick={() => toggleExpand(group.name)} className="p-1 hover:bg-white/10 rounded">
-                              {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                            </button>
-                            <input type="checkbox" checked={allSelected}
-                              ref={(el) => { if (el && someSelected && !allSelected) el.indeterminate = true }}
-                              onChange={() => toggleGroup(group.name, group.rules)}
-                              className="w-4 h-4 rounded accent-indigo-500" />
-                            <span className="text-sm font-medium">{GROUP_LABELS[group.name] || group.name}</span>
-                            <span className="text-xs text-muted ml-auto">
-                              {ruleNames.filter((r: string) => editRules.includes(r)).length}/{ruleNames.length}
-                            </span>
-                          </div>
-                          {isExpanded && (
-                            <div className="pl-10 pb-2 space-y-1">
-                              {group.rules.map((rule: any) => (
-                                <label key={rule.name} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/5 cursor-pointer">
-                                  <input type="checkbox" checked={editRules.includes(rule.name)}
-                                    onChange={() => toggleRule(rule.name)}
-                                    className="w-3.5 h-3.5 rounded accent-indigo-500" />
-                                  <span className="text-xs">{rule.label}</span>
-                                  <span className={`text-xs ml-auto px-1.5 py-0.5 rounded-full ${rule.severity === 'error' ? 'bg-red-500/20 text-red-300' : 'bg-yellow-500/20 text-yellow-300'}`}>
-                                    {rule.severity === 'error' ? 'error' : 'warn'}
-                                  </span>
-                                </label>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
+                  <label className="block text-sm text-muted mb-2">Reglas de validación</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(process.rules_config || []).length > 0 ? (
+                      (process.rules_config || []).map((r: string) => (
+                        <span key={r} className="text-[11px] px-2 py-0.5 rounded-full bg-white/10 text-white/80">{ruleLabel(r)}</span>
+                      ))
+                    ) : (
+                      <p className="text-xs text-muted">Sin reglas seleccionadas.</p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -931,7 +899,7 @@ export default function ProcessDetail() {
             <AlertCircle className="w-6 h-6 text-red-400 shrink-0" />
             <div>
               <p className="text-sm font-medium text-red-300">El análisis falló</p>
-              <p className="text-xs text-muted mt-1">{process.progress?.error || 'Error desconocido'}</p>
+              <p className="text-xs text-muted mt-1">{process.progress?.error || process.progress?.load_message || 'Error desconocido'}</p>
             </div>
           </div>
         </GlassContainer>

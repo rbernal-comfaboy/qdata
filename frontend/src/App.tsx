@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './hooks/useAuth'
 import { useTheme } from './hooks/useTheme'
 import Layout from './components/layout/Layout'
+import ErrorBoundary from './components/ErrorBoundary'
 import { Loader2 } from 'lucide-react'
 
 const Dashboard = lazy(() => import('./pages/Dashboard'))
@@ -47,7 +48,8 @@ export default function App() {
   return (
     <BrowserRouter>
       <Suspense fallback={<PageLoader />}>
-        <Routes>
+        <ErrorBoundary>
+          <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route
@@ -67,6 +69,7 @@ export default function App() {
             <Route path="datasources/new" element={<SourceForm />} />
             <Route path="datasources/:id/edit" element={<SourceForm />} />
             <Route path="analyze" element={<Analyze />} />
+            <Route path="analyze/:id" element={<Analyze />} />
             <Route path="reports" element={<Reports />} />
             <Route path="reports/:id" element={<ReportDetail />} />
             <Route path="reports/:reportId/rules/:ruleIdx" element={<RuleDetail />} />
@@ -81,6 +84,7 @@ export default function App() {
             <Route path="admin/users" element={<AdminUsers />} />
           </Route>
         </Routes>
+        </ErrorBoundary>
       </Suspense>
     </BrowserRouter>
   )

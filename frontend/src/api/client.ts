@@ -16,7 +16,9 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   (error) => {
-    if (error.response?.status === 401) {
+    const status = error.response?.status
+    const detail = error.response?.data?.detail
+    if (status === 401 || (status === 403 && detail === 'Not authenticated')) {
       localStorage.removeItem('qdata_token')
       window.location.href = '/login'
     }

@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
-  BookOpen, Play, AlertCircle, Loader2,
+  BookOpen, Play, AlertCircle, Loader2, Save,
   ChevronDown, ChevronRight,
 } from 'lucide-react'
 import api from '../api/client'
@@ -20,6 +20,8 @@ const GROUP_LABELS: Record<string, string> = {
 
 export default function Analyze() {
   const navigate = useNavigate()
+  const { id: editId } = useParams<{ id: string }>()
+  const isEdit = !!editId
   const [projectName, setProjectName] = useState('')
   const [sourceId, setSourceId] = useState('')
   const [selectedRules, setSelectedRules] = useState<string[]>([])
@@ -38,6 +40,9 @@ export default function Analyze() {
   const [nitCheckDigit, setNitCheckDigit] = useState<boolean>(true)
   const [groupId, setGroupId] = useState('')
 
+  const editPrefilledRef = useRef(false)
+  const prefillSourceRef = useRef('')
+
   const { data: rulesData } = useQuery({
     queryKey: ['rules-groups'],
     queryFn: () => api.get('/rules/groups').then((r) => r.data),
@@ -46,6 +51,7 @@ export default function Analyze() {
   const groups = (rulesData?.groups ?? []).filter((g: any) => g.name !== 'todo')
 
   useEffect(() => {
+    if (isEdit) return
     if (groups.length > 0) {
       const all: string[] = groups.flatMap((g: any) => g.rules.map((r: any) => r.name))
       setSelectedRules([...new Set(all)])
@@ -53,19 +59,33 @@ export default function Analyze() {
       groups.forEach((g: any) => { expanded[g.name] = true })
       setExpandedGroups(expanded)
     }
-  }, [rulesData])
+  }, [rulesData, isEdit])
 
   useEffect(() => {
+    if (editPrefilledRef.current) return
     setSimilaresThreshold(similaresMode === 'profundo' ? 70 : 80)
   }, [similaresMode])
 
   useEffect(() => {
+    if (editPrefilledRef.current) return
     setV3Threshold(v3Mode === 'profundo' ? 90 : 80)
   }, [v3Mode])
 
   const { data: sources, isLoading } = useQuery({
     queryKey: ['sources'],
     queryFn: () => api.get('/sources').then((r) => r.data),
+  })
+
+  const { data: existingProcess, isError: processError } = useQuery({
+    queryKey: ['process', editId],
+    queryFn: () => api.get(`/processes/${editId}`).then((r) => r.data),
+    enabled: isEdit,
+  })
+
+  const { data: selectedSourceDetail } = useQuery({
+    queryKey: ['source', sourceId],
+    queryFn: () => api.get(`/sources/${sourceId}`).then((r) => r.data),
+    enabled: isEdit && !!sourceId,
   })
 
   const { data: analysisGroups = [] } = useQuery({
@@ -80,28 +100,77 @@ export default function Analyze() {
   })
 
   useEffect(() => {
-    if (previewData?.columns) {
+    if (previewData?.columns && !editPrefilledRef.current) {
+      setSelectedColumns(previewData.columns)
+    } else if (previewData?.columns && isEdit && sourceId !== prefillSourceRef.current) {
       setSelectedColumns(previewData.columns)
     }
-  }, [previewData])
+  }, [previewData, sourceId, isEdit])
+
+  useEffect(() => {
+    if (!isEdit || !existingProcess) return
+    const sc = existingProcess.source_config || {}
+    const rc = existingProcess.rule_configs || {}
+    const allRules = (rulesData?.groups ?? []).filter((g: any) => g.name !== 'todo')
+
+    editPrefilledRef.current = true
+
+    setProjectName(existingProcess.name || '')
+    setSelectedRules(existingProcess.rules_config || [])
+    setGroupId(existingProcess.group_id || '')
+    const expanded: Record<string, boolean> = {}
+    allRules.forEach((g: any) => { expanded[g.name] = true })
+    setExpandedGroups(expanded)
+
+    const rcV1 = rc.personas_similares
+    if (rcV1?.mode) setSimilaresMode(rcV1.mode)
+    if (rcV1?.threshold != null) setSimilaresThreshold(Math.round(rcV1.threshold * 100))
+
+    const rcV2 = rc.personas_similares_v2
+    if (rcV2) {
+      if (rcV2.mode) setV2Mode(rcV2.mode)
+      if (rcV2.threshold != null) setV2Threshold(Math.round(rcV2.threshold * 100))
+      if (Array.isArray(rcV2.columns) && rcV2.columns.length) {
+        setV2Columns(rcV2.columns)
+        const w: Record<string, number> = {}
+        rcV2.columns.forEach((c: string) => {
+          const raw = rcV2.weights?.[c] ?? 0
+          w[c] = raw > 0 ? Math.round(raw * 100) : guessV2Weight(c)
+        })
+        setV2Weights(w)
+      }
+    }
+
+    const rcV3 = rc.personas_similares_v3
+    if (rcV3) {
+      if (rcV3.mode) setV3Mode(rcV3.mode)
+      if (rcV3.threshold != null) setV3Threshold(Math.round(rcV3.threshold * 100))
+    }
+
+    const rcNit = rc.nit_valid
+    if (rcNit?.check_digit != null) setNitCheckDigit(!!rcNit.check_digit)
+
+    if (Array.isArray(sc.selected_columns) && sc.selected_columns.length) {
+      setSelectedColumns(sc.selected_columns)
+    }
+
+    const matched = (sources ?? []).find((s: any) =>
+      s.source_type === sc.source_type && s.query === (sc.query || '')
+    )
+    if (matched) {
+      prefillSourceRef.current = matched.id
+      setSourceId(matched.id)
+    }
+  }, [isEdit, existingProcess, sources, rulesData])
 
   const handleSubmit = async () => {
     setStartError('')
     setStarting(true)
     try {
-      const payload: any = {
-        project_name: projectName || `Análisis ${new Date().toLocaleDateString()}`,
-        source_id: sourceId,
-        rules: selectedRules,
-        group_id: groupId || null,
-      }
-      if (selectedColumns.length > 0 && selectedColumns.length < (previewData?.columns?.length || 0)) {
-        payload.columns = selectedColumns
-      }
       const hasCols = selectedColumns.length > 0 && selectedColumns.length < (previewData?.columns?.length || 0)
-      payload.rule_configs = {}
+      const rc: any = {}
       if (selectedRules.includes('personas_similares')) {
-        payload.rule_configs.personas_similares = {
+        rc.personas_similares = {
           mode: similaresMode,
           threshold: similaresThreshold / 100,
           columns: hasCols ? selectedColumns : undefined,
@@ -113,7 +182,7 @@ export default function Analyze() {
         v2cols.forEach((c: string) => {
           v2w[c] = (v2Weights[c] ?? guessV2Weight(c)) / 100
         })
-        payload.rule_configs.personas_similares_v2 = {
+        rc.personas_similares_v2 = {
           mode: v2Mode,
           threshold: v2Threshold / 100,
           columns: v2cols,
@@ -121,24 +190,53 @@ export default function Analyze() {
         }
       }
       if (selectedRules.includes('personas_similares_v3')) {
-        payload.rule_configs.personas_similares_v3 = {
+        rc.personas_similares_v3 = {
           mode: v3Mode,
           threshold: v3Threshold / 100,
           columns: hasCols ? selectedColumns : undefined,
         }
       }
       if (selectedRules.includes('nit_valid')) {
-        payload.rule_configs.nit_valid = {
+        rc.nit_valid = {
           check_digit: nitCheckDigit,
         }
       }
       if (selectedRules.includes('duplicate_check') && hasCols) {
-        payload.rule_configs.duplicate_check = {
+        rc.duplicate_check = {
           columns: selectedColumns,
         }
       }
-      const res = await api.post('/analyze/start', payload)
-      navigate(`/processes/${res.data.project_id}`)
+
+      if (isEdit && editId) {
+        const baseSC = existingProcess?.source_config || {}
+        const chosen = (sources ?? []).find((s: any) => s.id === sourceId)
+        const sc: any = {
+          source_type: selectedSourceDetail?.source_type || chosen?.source_type || baseSC.source_type || '',
+          connection_string: selectedSourceDetail?.connection_string || baseSC.connection_string || '',
+          query: selectedSourceDetail?.query || chosen?.query || baseSC.query || '',
+          file_path: selectedSourceDetail?.file_path || baseSC.file_path || '',
+        }
+        if (selectedColumns.length > 0) sc.selected_columns = selectedColumns
+        const res = await api.put(`/processes/${editId}`, {
+          name: projectName || existingProcess?.name,
+          source_config: sc,
+          rules_config: selectedRules,
+          rule_configs: rc,
+          group_id: groupId || null,
+        })
+        navigate(`/processes/${editId}`)
+      } else {
+        const payload: any = {
+          project_name: projectName || `Análisis ${new Date().toLocaleDateString()}`,
+          source_id: sourceId,
+          rules: selectedRules,
+          group_id: groupId || null,
+        }
+        if (hasCols) payload.columns = selectedColumns
+        payload.rule_configs = rc
+        const res = await api.post('/analyze/start', payload)
+        navigate(`/processes/${res.data.project_id}`)
+      }
     } catch (err: any) {
       setStarting(false)
       setStartError(err?.response?.data?.detail || 'Error al iniciar el análisis')
@@ -223,7 +321,14 @@ export default function Analyze() {
 
   return (
     <div>
-      <h1 className="text-3xl font-bold mb-8">Nuevo Análisis</h1>
+      <h1 className="text-3xl font-bold mb-8">{isEdit ? 'Editar Análisis' : 'Nuevo Análisis'}</h1>
+
+      {isEdit && processError && (
+        <div className="mb-6 bg-red-500/20 border border-red-500/30 rounded-xl p-4 text-red-300 flex items-start gap-2">
+          <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+          <span className="text-sm">No se pudo cargar el análisis para editar.</span>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
@@ -559,13 +664,16 @@ export default function Analyze() {
             </div>
           </GlassContainer>
 
-          <button onClick={handleSubmit} disabled={!sourceId || starting || selectedRules.length === 0}
+          <button onClick={handleSubmit}
+            disabled={starting || selectedRules.length === 0 || (isEdit ? !existingProcess : !sourceId)}
             className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50">
             {starting ? (
-              <><Loader2 className="w-4 h-4 animate-spin" /> Iniciando...</>
+              <><Loader2 className="w-4 h-4 animate-spin" /> {isEdit ? 'Guardando...' : 'Iniciando...'}</>
+            ) : isEdit ? (
+              <><Save className="w-4 h-4" /> Guardar Cambios</>
             ) : (
               <><Play className="w-4 h-4" /> Ejecutar Análisis</>
-          )}
+            )}
           </button>
 
           {startError && (

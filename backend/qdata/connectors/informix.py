@@ -490,7 +490,7 @@ class InformixConnector(Connector):
 import subprocess, sys, json, textwrap
 
 
-def _load_subprocess(conn_str: str, query: str, timeout: int = 120) -> pd.DataFrame:
+def _load_subprocess(conn_str: str, query: str, timeout: int = 600) -> pd.DataFrame:
     """Run a SELECT query in a subprocess and return results as DataFrame."""
     import base64
     encoded = base64.b64encode(query.encode()).decode()

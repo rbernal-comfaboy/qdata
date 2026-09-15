@@ -22,6 +22,7 @@ class UpdateProcessRequest(BaseModel):
     name: str | None = None
     source_config: dict | None = None
     rules_config: list[str] | None = None
+    rule_configs: dict | None = None
     group_id: str | None = None
 
 
@@ -226,6 +227,8 @@ async def update_process(
         project.source_config = req.source_config
     if req.rules_config is not None:
         project.rules_config = req.rules_config
+    if req.rule_configs is not None:
+        project.rule_configs = req.rule_configs
     if req.group_id is not None:
         project.group_id = _uuid.UUID(req.group_id) if req.group_id else None
 

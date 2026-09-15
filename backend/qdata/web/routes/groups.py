@@ -1,5 +1,6 @@
 """Rutas CRUD para grupos de análisis y dashboard consolidado."""
 
+from datetime import datetime
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -9,6 +10,7 @@ from sqlalchemy.orm import defer
 
 from qdata.db.models import AnalysisGroup, GroupPermission, Project, Report
 from qdata.db.session import get_session
+from qdata.core.engine import RULE_REGISTRY
 from qdata.auth.dependencies import get_current_user
 from qdata.auth.permissions import require_role
 
@@ -31,6 +33,9 @@ class GroupUpdate(BaseModel):
 async def list_groups(
     user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    start: datetime | None = None,
+    end: datetime | None = None,
+    rules: str | None = None,
 ):
     if user.role == "admin":
         base_q = select(AnalysisGroup)
@@ -39,6 +44,13 @@ async def list_groups(
         base_q = select(AnalysisGroup).where(
             or_(AnalysisGroup.user_id == user.id, AnalysisGroup.id.in_(subq))
         )
+
+    period_conds = []
+    if start is not None:
+        period_conds.append(Report.executed_at >= start)
+    if end is not None:
+        period_conds.append(Report.executed_at <= end)
+    rule_list = [r.strip() for r in (rules or "").split(",") if r.strip()]
 
     subq_proj_count = (
         select(func.count(Project.id))
@@ -49,14 +61,14 @@ async def list_groups(
     subq_report_count = (
         select(func.count(Report.id))
         .join(Project, Project.id == Report.project_id)
-        .where(Project.group_id == AnalysisGroup.id)
+        .where(Project.group_id == AnalysisGroup.id, *period_conds)
         .correlate(AnalysisGroup)
         .scalar_subquery()
     )
     subq_last_report = (
         select(Report.executed_at)
         .join(Project, Project.id == Report.project_id)
-        .where(Project.group_id == AnalysisGroup.id)
+        .where(Project.group_id == AnalysisGroup.id, *period_conds)
         .correlate(AnalysisGroup)
         .order_by(Report.executed_at.desc())
         .limit(1)
@@ -65,7 +77,7 @@ async def list_groups(
     subq_avg_score = (
         select(func.avg(Report.score))
         .join(Project, Project.id == Report.project_id)
-        .where(Project.group_id == AnalysisGroup.id)
+        .where(Project.group_id == AnalysisGroup.id, *period_conds)
         .correlate(AnalysisGroup)
         .scalar_subquery()
     )
@@ -86,6 +98,27 @@ async def list_groups(
     if group_ids:
         try:
             uuid_list = ", ".join(f"'{gid}'::uuid" for gid in group_ids)
+
+            agg_where = f" WHERE p.group_id IN ({uuid_list}) AND r.result_json IS NOT NULL"
+            agg_params: dict = {}
+            if start is not None:
+                agg_where += " AND r.executed_at >= :start_ts"
+                agg_params["start_ts"] = start
+            if end is not None:
+                agg_where += " AND r.executed_at <= :end_ts"
+                agg_params["end_ts"] = end
+
+            rule_where = ""
+            if rule_list:
+                stored_names = [RULE_REGISTRY[n].name if n in RULE_REGISTRY else n for n in rule_list]
+                rule_params = {f"rule_{i}": rn for i, rn in enumerate(stored_names)}
+                rule_where = (
+                    " WHERE rule.value->>'rule_name' IN ("
+                    + ", ".join(f":{k}" for k in rule_params)
+                    + ")"
+                )
+                agg_params.update(rule_params)
+
             agg_sql = text(f"""
                 WITH latest AS (
                     SELECT DISTINCT ON (r.project_id)
@@ -94,7 +127,7 @@ async def list_groups(
                         p.group_id
                     FROM reports r
                     JOIN projects p ON r.project_id = p.id
-                    WHERE p.group_id IN ({uuid_list}) AND r.result_json IS NOT NULL
+                    {agg_where}
                     ORDER BY r.project_id, r.executed_at DESC
                 )
                 SELECT
@@ -103,9 +136,10 @@ async def list_groups(
                     COALESCE(SUM((rule.value->>'total')::int), 0) AS total_records
                 FROM latest l
                 CROSS JOIN LATERAL jsonb_array_elements(l.rule_data) AS rule
+                {rule_where}
                 GROUP BY l.group_id
             """)
-            agg_result = await session.execute(agg_sql)
+            agg_result = await session.execute(agg_sql, agg_params)
             for row in agg_result.all():
                 errors_map[str(row[0])] = {
                     "total_errors": row[1] or 0,

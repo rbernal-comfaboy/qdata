@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     jwt_secret: str = "dev-secret-change-in-prod"
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 1440
+    jwt_expire_minutes: int = 10080
     smtp_host: str = "localhost"
     smtp_port: int = 1025
     smtp_user: str = ""

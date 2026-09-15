@@ -1,14 +1,15 @@
 from typing import Any
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, or_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from qdata.auth.dependencies import get_current_user
 from qdata.auth.permissions import require_role
 from qdata.core.engine import RULE_REGISTRY, RULE_GROUPS, SIMILARITY_LEVELS
-from qdata.db.models import CustomRule, RuleGroup, User
+from qdata.db.models import AnalysisGroup, CustomRule, GroupPermission, Project, Report, RuleGroup, User
 from qdata.db.session import get_session
 
 router = APIRouter()
@@ -116,6 +117,77 @@ async def list_rules():
     return {"built_in": built_in}
 
 
+@router.get("/stats")
+async def rule_stats(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    start: datetime | None = None,
+    end: datetime | None = None,
+    rules: str | None = None,
+    groups: str | None = None,
+):
+    """Porcentaje de errores por regla sobre el reporte más reciente de cada
+    proyecto, acotado a período, reglas y grupos de análisis seleccionados."""
+    if user.role == "admin":
+        gid_q = select(AnalysisGroup.id)
+    else:
+        subq = select(GroupPermission.group_id).where(GroupPermission.user_id == user.id)
+        gid_q = select(AnalysisGroup.id).where(
+            or_(AnalysisGroup.user_id == user.id, AnalysisGroup.id.in_(subq))
+        )
+    group_ids = [str(x) for x in (await session.execute(gid_q)).scalars().all()]
+    if groups:
+        wanted = set(x.strip() for x in groups.split(",") if x.strip())
+        group_ids = [g for g in group_ids if g in wanted]
+    if not group_ids:
+        return []
+
+    uuid_list = ", ".join(f"'{g}'::uuid" for g in group_ids)
+    conds = [f"p.group_id IN ({uuid_list})", "r.result_json IS NOT NULL"]
+    params: dict = {}
+    if start is not None:
+        conds.append("r.executed_at >= :start_ts")
+        params["start_ts"] = start
+    if end is not None:
+        conds.append("r.executed_at <= :end_ts")
+        params["end_ts"] = end
+
+    rule_where = ""
+    rule_names = [x.strip() for x in (rules or "").split(",") if x.strip()]
+    if rule_names:
+        stored_names = [RULE_REGISTRY[n].name if n in RULE_REGISTRY else n for n in rule_names]
+        rp = {f"rule_{i}": rn for i, rn in enumerate(stored_names)}
+        rule_where = "WHERE rule.value->>'rule_name' IN (" + ", ".join(f":{k}" for k in rp) + ")"
+        params.update(rp)
+
+    sql = text(f"""
+        WITH latest AS (
+            SELECT DISTINCT ON (r.project_id)
+                r.project_id,
+                COALESCE(r.rule_totals::jsonb, r.result_json::jsonb->'results') AS rule_data
+            FROM reports r
+            JOIN projects p ON r.project_id = p.id
+            WHERE {' AND '.join(conds)}
+            ORDER BY r.project_id, r.executed_at DESC
+        )
+        SELECT
+            rule.value->>'rule_name' AS rn,
+            COALESCE(SUM((rule.value->>'failed')::int), 0) AS failed,
+            COALESCE(SUM((rule.value->>'total')::int), 0) AS total
+        FROM latest l
+        CROSS JOIN LATERAL jsonb_array_elements(l.rule_data) AS rule
+        {rule_where}
+        GROUP BY rn
+        ORDER BY failed DESC
+    """)
+    res = await session.execute(sql, params)
+    out = []
+    for rn, failed, total in res.all():
+        pct = round(failed / total * 100, 2) if total else 0.0
+        out.append({"rule_name": rn, "failed": failed, "total": total, "pct": pct})
+    return out
+
+
 @router.get("/groups")
 async def list_rule_groups(
     user: User | None = Depends(get_current_user),
@@ -130,6 +202,7 @@ async def list_rule_groups(
             if rname in RULE_REGISTRY:
                 rules.append({
                     "name": rname,
+                    "rule_name": RULE_REGISTRY[rname].name,
                     "label": rmeta["label"],
                     "severity": rmeta["severity"],
                     "description": rmeta["desc"],
